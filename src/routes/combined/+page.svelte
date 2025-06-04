@@ -41,11 +41,20 @@ let mode: 'force' | 'manual' = 'force';
 let isDraggingForEdge = false;
 let dragSourceNode: Node | null = null;
 let tempEdgeLine: d3.Selection<SVGLineElement, unknown, null, undefined> | null = null;
+let justCompletedEdgeCreation = false;
 
 // --- Force simulation state ---
 let simulation: d3.Simulation<Node, Edge>;
 let animationFrameId: number | null = null;
 let isDraggingNode = false;
+
+// --- Click vs Drag detection ---
+let dragStartPosition: { x: number; y: number } | null = null;
+let draggedNode: Node | null = null;
+const clickThreshold = 3; // pixels - if movement is less than this, consider it a click
+
+// --- Multi-select drag state ---
+let dragOffsets: Map<string, { dx: number; dy: number }> = new Map();
 
 // --- Manual repulsion state ---
 const repelDistance = 80;
@@ -316,6 +325,19 @@ onMount(() => {
 	if (mode === 'force') restartSimulation();
 	if (browser) {
 		window.addEventListener('keydown', handleKeyDown);
+		
+		// Add global context menu handler to prevent context menu after edge creation
+		const handleGlobalContextMenu = (event: MouseEvent) => {
+			if (justCompletedEdgeCreation) {
+				console.log('Preventing global context menu after edge creation');
+				event.preventDefault();
+				event.stopPropagation();
+			}
+		};
+		document.addEventListener('contextmenu', handleGlobalContextMenu);
+		
+		// Store reference for cleanup
+		window.globalContextMenuHandler = handleGlobalContextMenu;
 	}
 });
 
@@ -324,6 +346,11 @@ onDestroy(() => {
 	if (animationFrameId) cancelAnimationFrame(animationFrameId);
 	if (browser) {
 		window.removeEventListener('keydown', handleKeyDown);
+		
+		// Remove global context menu handler
+		if (window.globalContextMenuHandler) {
+			document.removeEventListener('contextmenu', window.globalContextMenuHandler);
+		}
 	}
 });
 
@@ -394,10 +421,33 @@ function initializeCanvas() {
 		.attr('d', 'M0,-5L10,0L0,5')
 		.attr('fill', '#666');	zoom = d3.zoom<SVGSVGElement, unknown>()
 		.scaleExtent([0.1, 5])
+		.filter((event) => {
+			// Only allow zooming/panning with middle mouse button (button === 1) or wheel events
+			// Don't preventDefault here - let D3 handle it
+			return event.button === 1 || event.type === 'wheel';
+		})
+		.on('start', (event) => {
+			// Prevent default behavior when zoom/pan starts with middle mouse
+			if (event.sourceEvent && event.sourceEvent.button === 1) {
+				event.sourceEvent.preventDefault();
+				event.sourceEvent.stopPropagation();
+			}
+		})
 		.on('zoom', handleZoom);
-	svg.call(zoom);	svg.on('mousedown', handleCanvasClick);
+	svg.call(zoom);
+	
+	// Use click events instead of mousedown, and set up proper event handling
+	svg.on('click', handleCanvasClick);
+	svg.on('contextmenu', handleCanvasClick); // Handle right-clicks via context menu
 	svg.on('mousemove', handleMouseMove);
-	svg.on('contextmenu', (event) => event.preventDefault());
+	
+	// Additional prevention of middle mouse button default behavior for non-zoom events
+	svg.on('auxclick', (event) => {
+		if (event.button === 1) {
+			event.preventDefault();
+			event.stopPropagation();
+		}
+	});
 	
 	// Add color palette
 	createColorPalette();
@@ -534,23 +584,34 @@ function handleZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>) {
 }
 
 function handleCanvasClick(event: MouseEvent) {
+	console.log('Canvas clicked, clearing selection');
 	if (event.defaultPrevented) return;
 	if (event.target !== svg.node()) return;
 	
-	// Only handle right-clicks (button === 2) for node creation
-	if (event.button !== 2) return;
+	// Handle context menu (right-click)
+	if (event.type === 'contextmenu') {
+		event.preventDefault(); // Always prevent context menu
+		
+		// If we just completed edge creation, don't show the node creation dialog
+		if (justCompletedEdgeCreation) {
+			console.log('Blocking context menu after edge creation');
+			return;
+		}
+		
+		const [x, y] = d3.pointer(event, g.node());
+		
+		// Store position and show create node dialog
+		pendingNodePosition = { x, y };
+		createNodeName = ''; // Ensure input starts blank
+		showCreateNodeDialog = true;
+		
+		clearSelection();
+	} else if (event.type === 'click' && event.button === 0) {
+		// Left-click: Clear selection when clicking on empty canvas
+		clearSelection();
+	}
 	
-	// Prevent the default context menu from appearing
-	event.preventDefault();
-	
-	const [x, y] = d3.pointer(event, g.node());
-	
-	// Store position and show create node dialog
-	pendingNodePosition = { x, y };
-	createNodeName = ''; // Ensure input starts blank
-	showCreateNodeDialog = true;
-	
-	clearSelection();
+	console.log('Canvas clicked, clearing selection');
 }
 
 function handleMouseMove(event: MouseEvent) {
@@ -637,7 +698,13 @@ function applyRepulsionForce(draggedNode: Node, depth: number = 0, forceMultipli
 function handleDragStart(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 	event.sourceEvent.stopPropagation();
 	event.sourceEvent.preventDefault();
-	isDraggingNode = true;	if (event.sourceEvent.button === 2) {
+	isDraggingNode = true;
+
+	if (event.sourceEvent.button === 2) {
+		// Right-click: start edge creation
+		// Prevent the context menu event that will fire after drag
+		justCompletedEdgeCreation = false;
+		
 		isDraggingForEdge = true;
 		dragSourceNode = d;
 		tempEdgeLine = g.append('line')
@@ -653,10 +720,43 @@ function handleDragStart(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node
 			.attr('stroke-width', 4)
 			.attr('stroke', '#ff6b6b');
 	} else {
+		// Left-click: start node dragging 
 		isDraggingForEdge = false;
+		
+		// Store drag start position and node for click detection
+		dragStartPosition = { x: event.x, y: event.y };
+		draggedNode = d;
+		
+		// If dragging a selected node and there are multiple selected nodes, prepare for multi-drag
+		if (selectedNodeIds.has(d.id) && selectedNodeIds.size > 1) {
+			// Calculate offsets for all selected nodes relative to the dragged node
+			dragOffsets.clear();
+			nodes.forEach(node => {
+				if (selectedNodeIds.has(node.id)) {
+					dragOffsets.set(node.id, {
+						dx: node.x - d.x,
+						dy: node.y - d.y
+					});
+				}
+			});
+		} else {
+			// Single node drag - clear offsets
+			dragOffsets.clear();
+		}
+		
 		if (mode === 'force') {
-			d.fx = d.x;
-			d.fy = d.y;
+			// Fix positions for all selected nodes if multi-dragging
+			if (selectedNodeIds.has(d.id) && selectedNodeIds.size > 1) {
+				nodes.forEach(node => {
+					if (selectedNodeIds.has(node.id)) {
+						node.fx = node.x;
+						node.fy = node.y;
+					}
+				});
+			} else {
+				d.fx = d.x;
+				d.fy = d.y;
+			}
 			if (simulation) simulation.alphaTarget(0.3).restart();
 		} else {
 			// manual mode: just highlight
@@ -669,17 +769,56 @@ function handleDragStart(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node
 
 function handleDrag(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 	if (!isDraggingForEdge) {
-		if (mode === 'force') {
-			d.fx = event.x;
-			d.fy = event.y;
-			d.x = event.x;
-			d.y = event.y;
+		// Check if we're doing multi-select drag
+		if (selectedNodeIds.has(d.id) && selectedNodeIds.size > 1 && dragOffsets.size > 0) {
+			// Multi-node drag: move all selected nodes together
+			const deltaX = event.x - d.x;
+			const deltaY = event.y - d.y;
+			
+			if (mode === 'force') {
+				// Update positions for all selected nodes
+				nodes.forEach(node => {
+					if (selectedNodeIds.has(node.id)) {
+						const offset = dragOffsets.get(node.id) || { dx: 0, dy: 0 };
+						node.fx = event.x + offset.dx;
+						node.fy = event.y + offset.dy;
+						node.x = event.x + offset.dx;
+						node.y = event.y + offset.dy;
+					}
+				});
+			} else {
+				// Manual mode: update positions and apply repulsion for all selected nodes
+				const nodesToUpdate: Node[] = [];
+				nodes.forEach(node => {
+					if (selectedNodeIds.has(node.id)) {
+						const offset = dragOffsets.get(node.id) || { dx: 0, dy: 0 };
+						node.x = event.x + offset.dx;
+						node.y = event.y + offset.dy;
+						nodesToUpdate.push(node);
+					}
+				});
+				
+				// Apply repulsion force for each moved node
+				nodesToUpdate.forEach(node => applyRepulsionForce(node));
+				
+				// Trigger reactivity
+				nodes = [...nodes];
+			}
 		} else {
-			d.x = event.x;
-			d.y = event.y;
-			applyRepulsionForce(d);
-			nodes = nodes.map(node => node.id === d.id ? { ...node, x: d.x, y: d.y } : node);
-		}	} else if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
+			// Single node drag
+			if (mode === 'force') {
+				d.fx = event.x;
+				d.fy = event.y;
+				d.x = event.x;
+				d.y = event.y;
+			} else {
+				d.x = event.x;
+				d.y = event.y;
+				applyRepulsionForce(d);
+				nodes = nodes.map(node => node.id === d.id ? { ...node, x: d.x, y: d.y } : node);
+			}
+		}
+	} else if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
 		const [x, y] = [event.x, event.y];
 		const dx = x - dragSourceNode.x;
 		const dy = y - dragSourceNode.y;
@@ -703,7 +842,15 @@ function handleDragEnd(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) 
 	d3.select(event.currentTarget).select('circle')
 		.attr('stroke-width', 2)
 		.attr('stroke', '#fff');
+	
 	if (isDraggingForEdge) {
+		// Prevent context menu after edge creation by setting flag
+		justCompletedEdgeCreation = true;
+		
+		// Prevent the context menu event that will fire after this drag
+		event.sourceEvent.preventDefault();
+		event.sourceEvent.stopPropagation();
+		
 		const targetElement = document.elementFromPoint(event.sourceEvent.clientX, event.sourceEvent.clientY);
 		const targetNode = findNodeFromElement(targetElement);
 		if (targetNode && targetNode.id !== dragSourceNode?.id) {
@@ -715,10 +862,64 @@ function handleDragEnd(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) 
 		}
 		isDraggingForEdge = false;
 		dragSourceNode = null;
+		
+		// Clear the flag after a short delay to allow any pending context menu events to be blocked
+		setTimeout(() => {
+			justCompletedEdgeCreation = false;
+		}, 100);
 	} else {
+		// Check if this was actually a click (minimal movement)
+		if (dragStartPosition && draggedNode) {
+			const dx = event.x - dragStartPosition.x;
+			const dy = event.y - dragStartPosition.y;
+			const distance = Math.sqrt(dx * dx + dy * dy);
+			
+			if (distance < clickThreshold) {
+				// This was a click, not a drag - handle selection
+				if (event.sourceEvent.shiftKey) {
+					// Shift-click: toggle node in/out of selection
+					if (selectedNodeIds.has(d.id)) {
+						selectedNodeIds.delete(d.id);
+					} else {
+						selectedNodeIds.add(d.id);
+					}
+				} else {
+					// Regular click: clear existing selection and select this node
+					selectedNodeIds.clear();
+					selectedEdgeIds.clear();
+					selectedNodeIds.add(d.id);
+				}
+				
+				// Update the selection state
+				selectedNodeIds = new Set(selectedNodeIds);
+				selectedEdgeIds = new Set(selectedEdgeIds);
+				
+				// Update color palette selection indicator
+				updateColorPaletteSelection();
+			}
+		}
+				// Reset drag detection variables
+		dragStartPosition = null;
+		draggedNode = null;
+		
+		// Clear drag offsets after drag ends
+		dragOffsets.clear();
+		
 		if (mode === 'force') {
-			d.fx = null;
-			d.fy = null;
+			// Release fixed positions for all selected nodes if multi-dragging
+			if (selectedNodeIds.size > 1) {
+				nodes.forEach(node => {
+					if (selectedNodeIds.has(node.id)) {
+						node.fx = null;
+						node.fy = null;
+					}
+				});
+			} else {
+				// Single node
+				d.fx = null;
+				d.fy = null;
+			}
+			
 			if (simulation) {
 				simulation.alphaTarget(0);
 				setTimeout(() => simulation.stop(), 200);
@@ -806,18 +1007,12 @@ function render() {
 			e.preventDefault(); e.stopPropagation(); deleteNode(d);
 		}
 	});
-	// Single click: select node
-	nodeMerge.on('click', (e, d) => {
-		if (e.button === 0) {
-			e.preventDefault(); e.stopPropagation(); selectNode(d, e);
-		}
-	});
 	// Double click: open rename dialog
 	nodeMerge.on('dblclick', (e, d) => {
 		if (e.button === 0) {
 			e.preventDefault(); e.stopPropagation(); openRenameDialog(d, 'node');
 		}
-	});	// Highlight selected nodes and update attributes
+	});// Highlight selected nodes and update attributes
 	nodeMerge.select('circle')
 		.attr('r', d => d.radius)  // Update radius for renamed nodes
 		.attr('fill', d => d.color)
@@ -967,6 +1162,7 @@ function clearSelection() {
 	
 	// Update color palette selection indicator
 	updateColorPaletteSelection();
+	render();
 }
 
 function changeSelectedNodesColor(color: string) {
@@ -1188,6 +1384,9 @@ p {
 	-moz-user-select: none;
 	-ms-user-select: none;
 	user-select: none;
+	/* Prevent middle mouse button from triggering page scroll */
+	-ms-scroll-chaining: none;
+	overscroll-behavior: none;
 }
 :global(.node) {
 	cursor: grab;
