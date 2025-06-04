@@ -31,7 +31,8 @@ let edgeCounter = 0;
 
 const canvasWidth = 800;
 const canvasHeight = 600;
-const nodeRadius = 20;
+const minNodeRadius = 15; // Minimum radius for readability
+const nodePadding = 8; // Padding around text inside the circle
 
 // Mode: 'force' (default) or 'manual'
 let mode: 'force' | 'manual' = 'force';
@@ -49,6 +50,34 @@ let isDraggingNode = false;
 // --- Manual repulsion state ---
 const repelDistance = 80;
 const repelStrength = 0.3;
+
+// --- Text Measurement Function ---
+function calculateNodeRadius(text: string): number {
+	// Create a temporary text element to measure text dimensions
+	const tempText = svg.append('text')
+		.attr('font-size', '12px')
+		.attr('font-weight', 'bold')
+		.text(text)
+		.style('visibility', 'hidden');
+	
+	const bbox = (tempText.node() as SVGTextElement).getBBox();
+	tempText.remove();
+	
+	// Calculate radius based on text width and height with padding
+	// Use the larger dimension to ensure text fits in the circle
+	const textWidth = bbox.width;
+	const textHeight = bbox.height;
+	const maxDimension = Math.max(textWidth, textHeight);
+	
+	// Calculate radius: half the diagonal of the text bounding box plus padding
+	// This ensures the text fits comfortably within the circle
+	const requiredRadius = Math.max(
+		(Math.sqrt(textWidth * textWidth + textHeight * textHeight) / 2) + nodePadding,
+		minNodeRadius
+	);
+	
+	return Math.ceil(requiredRadius);
+}
 const maxRecursionDepth = 100;
 
 // --- Dialog state for renaming nodes/edges ---
@@ -303,7 +332,7 @@ function spawnTestGraph() {
 		id: 'node-0',
 		x: canvasWidth / 2,
 		y: canvasHeight / 2,
-		radius: nodeRadius,
+		radius: calculateNodeRadius('Center'),
 		label: 'Center',
 		color: '#4285f4'
 	};
@@ -312,12 +341,13 @@ function spawnTestGraph() {
 	for (let i = 1; i <= nNodes; i++) {
 		const angle = (2 * Math.PI * i) / nNodes;
 		const x = canvasWidth / 2 + 250 * Math.cos(angle);
-		const y = canvasHeight / 2 + 250 * Math.sin(angle);		const node: Node = {
+		const y = canvasHeight / 2 + 250 * Math.sin(angle);		const nodeLabel = `Node ${i}`;
+		const node: Node = {
 			id: `node-${i}`,
 			x,
 			y,
-			radius: nodeRadius,
-			label: `Node ${i}`,
+			radius: calculateNodeRadius(nodeLabel),
+			label: nodeLabel,
 			color: '#4285f4'
 		};
 		nodes.push(node);
@@ -459,7 +489,7 @@ function updateColorPaletteSelection() {
 function initializeSimulation() {
 	simulation = d3.forceSimulation<Node>(nodes)
 		.force('charge', d3.forceManyBody().strength(-300).distanceMax(80).distanceMin(5))
-		.force('collision', d3.forceCollide().radius(nodeRadius + 2).strength(0.7))
+		.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7))
 		.alphaDecay(0.25)
 		.velocityDecay(0.7)
 		.on('tick', onSimulationTick);
@@ -478,7 +508,7 @@ function onSimulationTick() {
 function restartSimulation() {
 	if (simulation) {
 		simulation.nodes(nodes);
-		simulation.force('collision', d3.forceCollide().radius(nodeRadius + 2).strength(0.7));
+		simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
 		simulation.alpha(0.3).restart();
 		// Removed auto-stop timeout to keep simulation active
 	}
@@ -491,7 +521,7 @@ function switchMode(newMode: 'force' | 'manual') {
 		// Always re-create simulation from current nodes
 		initializeSimulation();
 		simulation.nodes(nodes);
-		simulation.force('collision', d3.forceCollide().radius(nodeRadius + 2).strength(0.7));
+		simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
 		restartSimulation();
 	} else {
 		if (simulation) simulation.stop();
@@ -532,8 +562,8 @@ function handleMouseMove(event: MouseEvent) {
 		if (distance > 0) {
 			const unitX = dx / distance;
 			const unitY = dy / distance;
-			const startX = dragSourceNode.x + unitX * nodeRadius;
-			const startY = dragSourceNode.y + unitY * nodeRadius;
+			const startX = dragSourceNode.x + unitX * dragSourceNode.radius;
+			const startY = dragSourceNode.y + unitY * dragSourceNode.radius;
 			tempEdgeLine
 				.attr('x1', startX)
 				.attr('y1', startY)
@@ -544,12 +574,15 @@ function handleMouseMove(event: MouseEvent) {
 }
 
 function addNode(x: number, y: number, label?: string) {
+	const nodeLabel = label || `Node ${nodeCounter + 1}`;
+	const radius = calculateNodeRadius(nodeLabel);
+	
 	const newNode: Node = {
 		id: `node-${++nodeCounter}`,
 		x,
 		y,
-		radius: nodeRadius,
-		label: label || `Node ${nodeCounter}`,
+		radius: radius,
+		label: nodeLabel,
 		color: '#4285f4'
 	};
 	nodes = [...nodes, newNode];
@@ -604,8 +637,7 @@ function applyRepulsionForce(draggedNode: Node, depth: number = 0, forceMultipli
 function handleDragStart(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 	event.sourceEvent.stopPropagation();
 	event.sourceEvent.preventDefault();
-	isDraggingNode = true;
-	if (event.sourceEvent.button === 2) {
+	isDraggingNode = true;	if (event.sourceEvent.button === 2) {
 		isDraggingForEdge = true;
 		dragSourceNode = d;
 		tempEdgeLine = g.append('line')
@@ -613,9 +645,9 @@ function handleDragStart(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node
 			.attr('stroke', '#666')
 			.attr('stroke-width', 2)
 			.attr('marker-end', 'url(#arrowhead)')
-			.attr('x1', d.x + nodeRadius)
+			.attr('x1', d.x + d.radius)
 			.attr('y1', d.y)
-			.attr('x2', d.x + nodeRadius + 10)
+			.attr('x2', d.x + d.radius + 10)
 			.attr('y2', d.y);
 		d3.select(event.currentTarget).select('circle')
 			.attr('stroke-width', 4)
@@ -647,8 +679,7 @@ function handleDrag(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 			d.y = event.y;
 			applyRepulsionForce(d);
 			nodes = nodes.map(node => node.id === d.id ? { ...node, x: d.x, y: d.y } : node);
-		}
-	} else if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
+		}	} else if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
 		const [x, y] = [event.x, event.y];
 		const dx = x - dragSourceNode.x;
 		const dy = y - dragSourceNode.y;
@@ -656,8 +687,8 @@ function handleDrag(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 		if (distance > 0) {
 			const unitX = dx / distance;
 			const unitY = dy / distance;
-			const startX = dragSourceNode.x + unitX * nodeRadius;
-			const startY = dragSourceNode.y + unitY * nodeRadius;
+			const startX = dragSourceNode.x + unitX * dragSourceNode.radius;
+			const startY = dragSourceNode.y + unitY * dragSourceNode.radius;
 			tempEdgeLine
 				.attr('x1', startX)
 				.attr('y1', startY)
@@ -786,12 +817,16 @@ function render() {
 		if (e.button === 0) {
 			e.preventDefault(); e.stopPropagation(); openRenameDialog(d, 'node');
 		}
-	});
-	// Highlight selected nodes
+	});	// Highlight selected nodes and update attributes
 	nodeMerge.select('circle')
+		.attr('r', d => d.radius)  // Update radius for renamed nodes
 		.attr('fill', d => d.color)
 		.attr('stroke', d => selectedNodeIds.has(d.id) ? '#ffb300' : '#fff')
 		.attr('stroke-width', d => selectedNodeIds.has(d.id) ? 4 : 2);
+
+	// Update text content for renamed nodes
+	nodeMerge.select('text')
+		.text(d => d.label);
 
 	// Update positions
 	nodeMerge.attr('transform', d => `translate(${d.x}, ${d.y})`);
@@ -838,11 +873,14 @@ function render() {
 			e.preventDefault(); e.stopPropagation(); openRenameDialog(d, 'edge');
 		}
 	});
-
 	// Highlight selected edges
 	edgeMerge.select('line')
 		.attr('stroke', d => selectedEdgeIds.has(d.id) ? '#ffb300' : '#666')
 		.attr('stroke-width', d => selectedEdgeIds.has(d.id) ? 4 : 2);
+	
+	// Update edge text content for renamed edges
+	edgeMerge.select('text')
+		.text(d => d.name);
 
 	edgeMerge.each(function(d) {
 		const edgeGroup = d3.select(this);
@@ -851,13 +889,12 @@ function render() {
 		if (sourceNode && targetNode && sourceNode.x !== undefined && sourceNode.y !== undefined && targetNode.x !== undefined && targetNode.y !== undefined) {
 			const dx = targetNode.x - sourceNode.x;
 			const dy = targetNode.y - sourceNode.y;
-			const dist = Math.sqrt(dx*dx + dy*dy);
-			if (dist > 0) {
+			const dist = Math.sqrt(dx*dx + dy*dy);			if (dist > 0) {
 				const ux = dx / dist, uy = dy / dist;
-				const startX = sourceNode.x + ux * nodeRadius;
-				const startY = sourceNode.y + uy * nodeRadius;
-				const endX = targetNode.x - ux * nodeRadius;
-				const endY = targetNode.y - uy * nodeRadius;
+				const startX = sourceNode.x + ux * sourceNode.radius;
+				const startY = sourceNode.y + uy * sourceNode.radius;
+				const endX = targetNode.x - ux * targetNode.radius;
+				const endY = targetNode.y - uy * targetNode.radius;
 				edgeGroup.select('line')
 					.attr('x1', startX).attr('y1', startY)
 					.attr('x2', endX).attr('y2', endY);
@@ -1025,11 +1062,25 @@ function closeRenameDialog() {
 function confirmRename() {
     if (selectedItem && renameType) {
         if (renameType === 'node') {
-            (selectedItem as Node).label = renameValue;
+            const node = selectedItem as Node;
+            node.label = renameValue;
+            // Recalculate radius based on new label
+            node.radius = calculateNodeRadius(renameValue);
             nodes = [...nodes];
+            
+            // Update collision detection in simulation if in force mode
+            if (mode === 'force' && simulation) {
+                simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
+                restartSimulation();
+            }
+            
+            // Force re-render
+            render();
         } else if (renameType === 'edge') {
             (selectedItem as Edge).name = renameValue;
             edges = [...edges];
+            // Force re-render for edge changes
+            render();
         }
     }
     closeRenameDialog();
