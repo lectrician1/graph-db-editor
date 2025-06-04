@@ -57,6 +57,11 @@ let renameType: 'node' | 'edge' | null = null;
 let selectedItem: Node | Edge | null = null;
 let renameValue = '';
 
+// --- Node creation state ---
+let showCreateNodeDialog = false;
+let pendingNodePosition: { x: number; y: number } | null = null;
+let createNodeName = '';
+
 // --- Selection state ---
 let selectedNodeIds = new Set<string>();
 let selectedEdgeIds = new Set<string>();
@@ -75,77 +80,194 @@ const colorPalette = [
 	'#607d8b'  // Blue Grey
 ];
 
-function changeSelectedNodesColor(newColor: string) {
-	nodes = nodes.map(node => {
-		if (selectedNodeIds.has(node.id)) {
-			return { ...node, color: newColor };
-		}
-		return node;
-	});
+// --- Backup and Save/Load functionality ---
+let autoSaveEnabled = true;
+let fileHandle: any = null; // For File System Access API
+let lastSaved = '';
+
+// Auto-save to localStorage whenever graph changes
+$: if (browser && autoSaveEnabled && (nodes.length > 0 || edges.length > 0)) {
+	autoSaveToLocalStorage();
 }
 
-function getSelectedNodeColor(): string | null {
-	if (selectedNodeIds.size === 0) return null;
-	const firstSelectedNode = nodes.find(n => selectedNodeIds.has(n.id));
-	return firstSelectedNode?.color || null;
-}
-
-function selectNode(node: Node, event: MouseEvent) {
-	if (event.shiftKey) {
-		if (selectedNodeIds.has(node.id)) {
-			selectedNodeIds.delete(node.id);
-		} else {
-			selectedNodeIds.add(node.id);
-		}
-	} else {
-		selectedNodeIds = new Set([node.id]);
-		selectedEdgeIds.clear();
+function autoSaveToLocalStorage() {
+	try {
+		const graphData = {
+			nodes: nodes.map(n => ({ ...n, fx: undefined, fy: undefined, vx: undefined, vy: undefined })),
+			edges: edges.map(e => ({ 
+				...e, 
+				source: typeof e.source === 'object' ? e.source.id : e.source,
+				target: typeof e.target === 'object' ? e.target.id : e.target
+			})),
+			nodeCounter,
+			edgeCounter,
+			mode,
+			timestamp: new Date().toISOString()
+		};
+		localStorage.setItem('graph-editor-autosave', JSON.stringify(graphData));
+		lastSaved = new Date().toLocaleTimeString();
+	} catch (error) {
+		console.warn('Auto-save failed:', error);
 	}
-	nodes = [...nodes]; // trigger re-render
-	updateColorPaletteSelection();
 }
 
-function selectEdge(edge: Edge, event: MouseEvent) {
-	if (event.shiftKey) {
-		if (selectedEdgeIds.has(edge.id)) {
-			selectedEdgeIds.delete(edge.id);
-		} else {
-			selectedEdgeIds.add(edge.id);
+function loadFromLocalStorage() {
+	try {
+		const saved = localStorage.getItem('graph-editor-autosave');
+		if (saved) {
+			const graphData = JSON.parse(saved);
+			nodes = graphData.nodes || [];
+			edges = graphData.edges || [];
+			nodeCounter = graphData.nodeCounter || 0;
+			edgeCounter = graphData.edgeCounter || 0;
+			mode = graphData.mode || 'force';
+			lastSaved = new Date(graphData.timestamp).toLocaleTimeString();
+			restartSimulation();
+			console.log('Loaded graph from auto-save');
+			return true;
 		}
-	} else {
-		selectedEdgeIds = new Set([edge.id]);
-		selectedNodeIds.clear();
+	} catch (error) {
+		console.warn('Failed to load from localStorage:', error);
 	}
-	edges = [...edges]; // trigger re-render
-	updateColorPaletteSelection();
+	return false;
 }
 
-function clearSelection() {
-	selectedNodeIds.clear();
-	selectedEdgeIds.clear();
-	nodes = [...nodes];
-	edges = [...edges];
-	updateColorPaletteSelection();
+function exportGraphAsJSON() {
+	const graphData = {
+		nodes: nodes.map(n => ({ ...n, fx: undefined, fy: undefined, vx: undefined, vy: undefined })),
+		edges: edges.map(e => ({ 
+			...e, 
+			source: typeof e.source === 'object' ? e.source.id : e.source,
+			target: typeof e.target === 'object' ? e.target.id : e.target
+		})),
+		nodeCounter,
+		edgeCounter,
+		mode,
+		exportedAt: new Date().toISOString()
+	};
+	return JSON.stringify(graphData, null, 2);
 }
 
-function handleKeyDown(event: KeyboardEvent) {
-	if (event.key === 'Delete' || event.key === 'Backspace') {
-		if (selectedNodeIds.size > 0 || selectedEdgeIds.size > 0) {
-			// Delete selected nodes
-			const nodeIdsToDelete = Array.from(selectedNodeIds);
-			for (const nodeId of nodeIdsToDelete) {
-				const node = nodes.find(n => n.id === nodeId);
-				if (node) deleteNode(node);
+function downloadGraph() {
+	const jsonData = exportGraphAsJSON();
+	const blob = new Blob([jsonData], { type: 'application/json' });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = `graph-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(url);
+}
+
+async function saveToFile() {
+	if (!('showSaveFilePicker' in window)) {
+		// Fallback to download for browsers without File System Access API
+		downloadGraph();
+		return;
+	}
+
+	try {
+		if (!fileHandle) {
+			fileHandle = await (window as any).showSaveFilePicker({
+				suggestedName: `graph-${new Date().toISOString().slice(0, 10)}.json`,
+				types: [{
+					description: 'JSON files',
+					accept: { 'application/json': ['.json'] }
+				}]
+			});
+		}
+
+		const writable = await fileHandle.createWritable();
+		await writable.write(exportGraphAsJSON());
+		await writable.close();
+		lastSaved = new Date().toLocaleTimeString();
+		console.log('Graph saved to file');		} catch (error: any) {
+			if (error.name !== 'AbortError') {
+				console.error('Save failed:', error);
+				// Fallback to download
+				downloadGraph();
 			}
-			// Delete selected edges
-			const edgeIdsToDelete = Array.from(selectedEdgeIds);
-			for (const edgeId of edgeIdsToDelete) {
-				const edge = edges.find(e => e.id === edgeId);
-				if (edge) deleteEdge(edge);
+		}
+}
+
+async function loadFromFile() {
+	if (!('showOpenFilePicker' in window)) {
+		// Fallback to file input for browsers without File System Access API
+		const input = document.createElement('input');
+		input.type = 'file';
+		input.accept = '.json';
+		input.onchange = (e) => {
+			const file = (e.target as HTMLInputElement).files?.[0];
+			if (file) {
+				const reader = new FileReader();
+				reader.onload = (e) => {
+					try {
+						const graphData = JSON.parse(e.target?.result as string);
+						loadGraphData(graphData);
+					} catch (error) {
+						alert('Error loading file: Invalid JSON format');
+					}
+				};
+				reader.readAsText(file);
 			}
-			clearSelection();
+		};
+		input.click();
+		return;
+	}
+
+	try {
+		const [fileHandle] = await (window as any).showOpenFilePicker({
+			types: [{
+				description: 'JSON files',
+				accept: { 'application/json': ['.json'] }
+			}]
+		});
+
+		const file = await fileHandle.getFile();
+		const text = await file.text();
+		const graphData = JSON.parse(text);
+		loadGraphData(graphData);
+	} catch (error) {
+		if (error.name !== 'AbortError') {
+			console.error('Load failed:', error);
+			alert('Error loading file');
 		}
 	}
+}
+
+function loadGraphData(graphData: any) {
+	try {
+		nodes = graphData.nodes || [];
+		edges = graphData.edges || [];
+		nodeCounter = graphData.nodeCounter || 0;
+		edgeCounter = graphData.edgeCounter || 0;
+		mode = graphData.mode || 'force';
+		clearSelection();
+		restartSimulation();
+		console.log('Graph loaded successfully');
+	} catch (error) {
+		console.error('Error loading graph data:', error);
+		alert('Error loading graph: Invalid data format');
+	}
+}
+
+function clearGraph() {
+	if (confirm('Are you sure you want to clear the entire graph? This cannot be undone.')) {
+		nodes = [];
+		edges = [];
+		nodeCounter = 0;
+		edgeCounter = 0;
+		clearSelection();
+		if (simulation) simulation.stop();
+		render();
+	}
+}
+
+function newGraph() {
+	clearGraph();
+	fileHandle = null; // Reset file handle for new graph
 }
 
 // --- Initialization ---
@@ -156,7 +278,12 @@ $: if (svg && (nodes || edges)) {
 onMount(() => {
 	initializeCanvas();
 	if (mode === 'force') initializeSimulation();
-	spawnTestGraph();
+	
+	// Try to load from localStorage first, otherwise spawn test graph
+	if (!loadFromLocalStorage()) {
+		spawnTestGraph();
+	}
+	
 	if (mode === 'force') restartSimulation();
 	if (browser) {
 		window.addEventListener('keydown', handleKeyDown);
@@ -235,11 +362,10 @@ function initializeCanvas() {
 		.attr('orient', 'auto')
 		.append('path')
 		.attr('d', 'M0,-5L10,0L0,5')
-		.attr('fill', '#666');
-	zoom = d3.zoom<SVGSVGElement, unknown>()
+		.attr('fill', '#666');	zoom = d3.zoom<SVGSVGElement, unknown>()
 		.scaleExtent([0.1, 5])
 		.on('zoom', handleZoom);
-	svg.call(zoom);	svg.on('click', handleCanvasClick);
+	svg.call(zoom);	svg.on('mousedown', handleCanvasClick);
 	svg.on('mousemove', handleMouseMove);
 	svg.on('contextmenu', (event) => event.preventDefault());
 	
@@ -319,8 +445,8 @@ function updateColorPaletteSelection() {
 			const x = 15 + (colorIndex % 5) * 20;
 			const y = 25 + Math.floor(colorIndex / 5) * 20;
 			indicator
-				.attr('cx', 20 + x)
-				.attr('cy', 20 + y)
+				.attr('cx', x)
+				.attr('cy', y)
 				.style('opacity', 1);
 		} else {
 			indicator.style('opacity', 0);
@@ -380,8 +506,20 @@ function handleZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>) {
 function handleCanvasClick(event: MouseEvent) {
 	if (event.defaultPrevented) return;
 	if (event.target !== svg.node()) return;
+	
+	// Only handle right-clicks (button === 2) for node creation
+	if (event.button !== 2) return;
+	
+	// Prevent the default context menu from appearing
+	event.preventDefault();
+	
 	const [x, y] = d3.pointer(event, g.node());
-	addNode(x, y);
+	
+	// Store position and show create node dialog
+	pendingNodePosition = { x, y };
+	createNodeName = ''; // Ensure input starts blank
+	showCreateNodeDialog = true;
+	
 	clearSelection();
 }
 
@@ -405,17 +543,32 @@ function handleMouseMove(event: MouseEvent) {
 	}
 }
 
-function addNode(x: number, y: number) {
+function addNode(x: number, y: number, label?: string) {
 	const newNode: Node = {
 		id: `node-${++nodeCounter}`,
 		x,
 		y,
 		radius: nodeRadius,
-		label: `Node ${nodeCounter}`,
+		label: label || `Node ${nodeCounter}`,
 		color: '#4285f4'
 	};
 	nodes = [...nodes, newNode];
 	restartSimulation();
+	return newNode;
+}
+
+function createNodeFromDialog() {
+	if (pendingNodePosition && createNodeName.trim()) {
+		addNode(pendingNodePosition.x, pendingNodePosition.y, createNodeName.trim());
+	}
+	// If no name provided, just close dialog without creating node
+	closeCreateNodeDialog();
+}
+
+function closeCreateNodeDialog() {
+	showCreateNodeDialog = false;
+	pendingNodePosition = null;
+	createNodeName = '';
 }
 
 function applyRepulsionForce(draggedNode: Node, depth: number = 0, forceMultiplier: number = 1) {
@@ -723,6 +876,138 @@ function render() {
 	edgeSelection.exit().remove();
 }
 
+// --- Selection Functions ---
+
+function selectNode(node: Node, event: MouseEvent) {
+	if (event.shiftKey) {
+		// Multi-select: toggle node in selection
+		if (selectedNodeIds.has(node.id)) {
+			selectedNodeIds.delete(node.id);
+		} else {
+			selectedNodeIds.add(node.id);
+		}
+	} else {
+		// Single select: clear existing selection and select this node
+		selectedNodeIds.clear();
+		selectedEdgeIds.clear();
+		selectedNodeIds.add(node.id);
+	}
+	// Update the selection state
+	selectedNodeIds = new Set(selectedNodeIds);
+	selectedEdgeIds = new Set(selectedEdgeIds);
+	
+	// Update color palette selection indicator
+	updateColorPaletteSelection();
+}
+
+function selectEdge(edge: Edge, event: MouseEvent) {
+	if (event.shiftKey) {
+		// Multi-select: toggle edge in selection
+		if (selectedEdgeIds.has(edge.id)) {
+			selectedEdgeIds.delete(edge.id);
+		} else {
+			selectedEdgeIds.add(edge.id);
+		}
+	} else {
+		// Single select: clear existing selection and select this edge
+		selectedNodeIds.clear();
+		selectedEdgeIds.clear();
+		selectedEdgeIds.add(edge.id);
+	}
+	// Update the selection state
+	selectedNodeIds = new Set(selectedNodeIds);
+	selectedEdgeIds = new Set(selectedEdgeIds);
+	
+	// Update color palette selection indicator
+	updateColorPaletteSelection();
+}
+
+function clearSelection() {
+	selectedNodeIds.clear();
+	selectedEdgeIds.clear();
+	selectedNodeIds = new Set();
+	selectedEdgeIds = new Set();
+	
+	// Update color palette selection indicator
+	updateColorPaletteSelection();
+}
+
+function changeSelectedNodesColor(color: string) {
+	if (selectedNodeIds.size === 0) return;
+	
+	nodes = nodes.map(node => {
+		if (selectedNodeIds.has(node.id)) {
+			return { ...node, color };
+		}
+		return node;
+	});
+	
+	// Re-render to show color changes
+	render();
+}
+
+function getSelectedNodeColor(): string | null {
+	if (selectedNodeIds.size === 0) return null;
+	
+	// If multiple nodes selected, return the color if they all have the same color
+	const selectedNodes = nodes.filter(node => selectedNodeIds.has(node.id));
+	if (selectedNodes.length === 0) return null;
+	
+	const firstColor = selectedNodes[0].color;
+	const allSameColor = selectedNodes.every(node => node.color === firstColor);
+	
+	return allSameColor ? firstColor : null;
+}
+
+function handleKeyDown(event: KeyboardEvent) {
+	// Delete selected nodes and edges
+	if (event.key === 'Delete' || event.key === 'Backspace') {
+		event.preventDefault();
+		
+		// Delete selected edges first
+		if (selectedEdgeIds.size > 0) {
+			edges = edges.filter(edge => !selectedEdgeIds.has(edge.id));
+			selectedEdgeIds.clear();
+		}
+		
+		// Delete selected nodes (and their connected edges)
+		if (selectedNodeIds.size > 0) {
+			const nodeIdsToDelete = Array.from(selectedNodeIds);
+			
+			// Remove edges connected to the nodes being deleted
+			edges = edges.filter(edge => {
+				const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id;
+				const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id;
+				return !nodeIdsToDelete.includes(sourceId) && !nodeIdsToDelete.includes(targetId);
+			});
+			
+			// Remove the nodes
+			nodes = nodes.filter(node => !selectedNodeIds.has(node.id));
+			selectedNodeIds.clear();
+		}
+		
+		// Update reactive state
+		selectedNodeIds = new Set();
+		selectedEdgeIds = new Set();
+		
+		// Restart simulation if in force mode
+		if (mode === 'force') {
+			restartSimulation();
+		}
+		
+		// Re-render
+		render();
+	}
+	
+	// Escape key clears selection
+	if (event.key === 'Escape') {
+		clearSelection();
+		render();
+	}
+}
+
+// --- End Selection Functions ---
+
 function openRenameDialog(item: Node | Edge, type: 'node' | 'edge') {
     selectedItem = item;
     renameType = type;
@@ -758,24 +1043,58 @@ function confirmRename() {
 
 <section>
 	<h1>Graph Database Editor (Force/Manual Switch)</h1>	<p>
-		Click on canvas to add nodes. Drag nodes to move them. Right-click and drag from one node to another to create edges. Click to select nodes/edges (Shift+click for multi-select). Double-click to rename. Press Delete to remove selected items. Middle-click to instantly delete.
+		Right-click on canvas to add nodes. Drag nodes to move them. Right-click and drag from one node to another to create edges. Click to select nodes/edges (Shift+click for multi-select). Double-click to rename. Press Delete to remove selected items. Middle-click to instantly delete.
 	</p>
+	
+	<!-- File Operations -->
+	<div class="file-controls" style="margin-bottom: 1rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; justify-content: center;">
+		<button on:click={newGraph} style="background: #4285f4; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer;">New</button>
+		<button on:click={loadFromFile} style="background: #34a853; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer;">Load</button>
+		<button on:click={saveToFile} style="background: #ea4335; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer;">Save</button>
+		<button on:click={downloadGraph} style="background: #ff9800; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer;">Download</button>
+		<button on:click={clearGraph} style="background: #666; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer;">Clear</button>
+		
+		<span style="margin-left: 1rem; font-size: 0.9rem; color: #666;">
+			Auto-save: 
+			<label style="cursor: pointer;">
+				<input type="checkbox" bind:checked={autoSaveEnabled} style="margin-left: 0.3rem;"> 
+				Enabled
+			</label>
+		</span>
+		
+		{#if lastSaved}
+			<span style="margin-left: 1rem; font-size: 0.8rem; color: #999;">
+				Last saved: {lastSaved}
+			</span>
+		{/if}
+	</div>
+	
 	<div style="margin-bottom:1rem;">
 		<label><input type="radio" bind:group={mode} value="force" on:change={() => switchMode('force')}> Global repulsion (default)</label>
 		<label style="margin-left:2em;"><input type="radio" bind:group={mode} value="manual" on:change={() => switchMode('manual')}> Local Repulsion</label>
 	</div>
 	<div class="canvas-container" bind:this={canvasContainer}>
 		<!-- D3 SVG will be inserted here -->
-	</div>
-
-	{#if showRenameDialog}
-		<div class="modal-backdrop">
-			<div class="modal-dialog">
+	</div>	{#if showRenameDialog}
+		<div class="modal-backdrop" on:contextmenu|preventDefault>
+			<div class="modal-dialog" on:contextmenu|preventDefault>
 				<h2>Rename {renameType === 'node' ? 'Node' : 'Edge'}</h2>
 				<input type="text" bind:value={renameValue} autofocus on:keydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') closeRenameDialog(); }} />
 				<div class="modal-actions">
 					<button on:click={confirmRename}>OK</button>
 					<button on:click={closeRenameDialog}>Cancel</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+	{#if showCreateNodeDialog}
+		<div class="modal-backdrop" on:contextmenu|preventDefault>
+			<div class="modal-dialog" on:contextmenu|preventDefault>
+				<h2>Create New Node</h2>
+				<input type="text" bind:value={createNodeName} placeholder="Enter node name" autofocus on:keydown={(e) => { if (e.key === 'Enter') createNodeFromDialog(); if (e.key === 'Escape') closeCreateNodeDialog(); }} />
+				<div class="modal-actions">
+					<button on:click={createNodeFromDialog}>OK</button>
+					<button on:click={closeCreateNodeDialog}>Cancel</button>
 				</div>
 			</div>
 		</div>
@@ -813,15 +1132,18 @@ p {
 	border-radius: 8px;
 	box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
+:global(.canvas-container svg) {
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+}
 :global(.node) {
 	cursor: grab;
 	user-select: none;
 }
 :global(.node:active) {
 	cursor: grabbing;
-}
-:global(.node:hover circle) {
-	fill: #1a73e8 !important;
 }
 :global(.node text) {
 	pointer-events: none;
@@ -852,6 +1174,10 @@ p {
 	align-items: center;
 	justify-content: center;
 	z-index: 1000;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
 }
 .modal-dialog {
 	background: #fff;
@@ -896,5 +1222,13 @@ p {
 }
 .modal-actions button:hover {
 	background: #1a73e8;
+}
+.file-controls button:hover {
+	opacity: 0.9;
+	transform: translateY(-1px);
+	box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.file-controls button:active {
+	transform: translateY(0);
 }
 </style>
