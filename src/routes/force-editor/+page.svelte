@@ -1,19 +1,20 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import * as d3 from 'd3';
 
-	interface Node {
+	interface Node extends d3.SimulationNodeDatum {
 		id: string;
 		x: number;
 		y: number;
 		radius: number;
 		label: string;
+		// d3-force properties (fx, fy, vx, vy are inherited from SimulationNodeDatum)
 	}
 
-	interface Edge {
+	interface Edge extends d3.SimulationLinkDatum<Node> {
 		id: string;
-		source: string;
-		target: string;
+		source: string | Node;
+		target: string | Node;
 		name: string;
 	}
 
@@ -36,10 +37,11 @@
 	let dragSourceNode: Node | null = null;
 	let tempEdgeLine: d3.Selection<SVGLineElement, unknown, null, undefined> | null = null;
 
-	// Force simulation parameters
-	const repelDistance = 80; // Distance at which nodes start repelling
-	const repelStrength = 0.3; // Strength of repulsion force
-	const maxRecursionDepth = 100; // Limit recursion to prevent performance issues
+	// d3-force simulation
+	let simulation: d3.Simulation<Node, Edge>;
+
+	// Track if we're currently dragging a node
+	let isDraggingNode = false;
 
 	// Reactive statement to re-render when nodes or edges change
 	$: if (svg && (nodes || edges)) {
@@ -47,45 +49,53 @@
 	}
 
 	onMount(() => {
-		// For simulation test: spawn 1000 nodes connected to a central node
-		if (nodes.length === 0) {
-			const centerNode: Node = {
-				id: 'node-0',
-				x: canvasWidth / 2,
-				y: canvasHeight / 2,
-				radius: nodeRadius,
-				label: 'Center'
-			};
-			let nNodes = 100;
-			nodes = [centerNode];
-			nodeCounter = 0;
-			const newNodes: Node[] = [];
-			const newEdges: Edge[] = [];
-			for (let i = 1; i <= nNodes; i++) {
-				const angle = (2 * Math.PI * i) / nNodes;
-				const x = canvasWidth / 2 + 250 * Math.cos(angle);
-				const y = canvasHeight / 2 + 250 * Math.sin(angle);
-				const node: Node = {
-					id: `node-${i}`,
-					x,
-					y,
-					radius: nodeRadius,
-					label: `Node ${i}`
-				};
-				newNodes.push(node);
-				newEdges.push({
-					id: `edge-${i}`,
-					source: centerNode.id,
-					target: node.id,
-					name: `Edge ${i}`
-				});
-			}
-			nodes = [centerNode, ...newNodes];
-			edges = newEdges;
-			nodeCounter = nNodes;
-			edgeCounter = nNodes;
-		}
 		initializeCanvas();
+		initializeSimulation();
+
+		// TEST: Spawn 1000 nodes connected to a central node
+        let nNones = 100;
+		const centerNode: Node = {
+			id: 'node-0',
+			x: canvasWidth / 2,
+			y: canvasHeight / 2,
+			radius: nodeRadius,
+			label: 'Center'
+		};
+		nodes = [centerNode];
+
+		for (let i = 1; i <= nNones; i++) {
+			const angle = (2 * Math.PI * i) / nNones;
+			const x = canvasWidth / 2 + 250 * Math.cos(angle);
+			const y = canvasHeight / 2 + 250 * Math.sin(angle);
+			const node: Node = {
+				id: `node-${i}`,
+				x,
+				y,
+				radius: nodeRadius,
+				label: `Node ${i}`
+			};
+			nodes.push(node);
+			edges.push({
+				id: `edge-${i}`,
+				source: centerNode.id,
+				target: node.id,
+				name: `Edge ${i}`
+			});
+		}
+
+		nodeCounter = nNones;
+		edgeCounter = nNones;
+
+		restartSimulation();
+	});
+
+	onDestroy(() => {
+		if (simulation) {
+			simulation.stop();
+		}
+		if (animationFrameId) {
+			cancelAnimationFrame(animationFrameId);
+		}
 	});
 
 	function initializeCanvas() {
@@ -116,7 +126,7 @@
 			.attr('d', 'M0,-5L10,0L0,5')
 			.attr('fill', '#666');
 
-		// Temporary arrowhead for edge creation (same as regular)
+		// Temporary arrowhead for edge creation
 		defs.append('marker')
 			.attr('id', 'temp-arrowhead')
 			.attr('viewBox', '0 -5 10 10')
@@ -149,6 +159,49 @@
 
 		// Initial render
 		render();
+	}	function initializeSimulation() {
+		simulation = d3.forceSimulation<Node>(nodes)
+			// Many-body force for node repulsion - prevents lag from overlapping nodes
+			.force('charge', d3.forceManyBody()
+				.strength(-300) // Gentle repulsion to prevent overlap lag
+				.distanceMax(80) // Only repel when close
+				.distanceMin(5) // Minimum distance to prevent extreme forces
+			)
+			// Collision force to prevent node overlap
+			// .force('collision', d3.forceCollide()
+			// 	.radius(nodeRadius + 2) // Smaller collision radius
+			// 	.strength(0.7) // Reduced collision strength to work with repulsion
+			// )
+			// Removed link force - edges are visual only, no pulling forces!
+			// Removed center and position forces - nodes stay where placed!
+			.alphaDecay(0.25) // Faster cooling
+			.velocityDecay(0.7) // Higher friction
+			.on('tick', onSimulationTick);
+
+		// Start with simulation paused - only activate during interactions
+		simulation.stop();
+	}
+
+	let animationFrameId: number | null = null;
+	let needsRender = false;
+
+	function onSimulationTick() {
+		// Throttle rendering to animation frames
+		if (!animationFrameId) {
+			animationFrameId = requestAnimationFrame(() => {
+				animationFrameId = null;
+				render();
+			});
+		}
+	}
+	function restartSimulation() {
+		if (simulation) {
+			simulation.nodes(nodes);
+			// Only run simulation for a short burst
+			simulation.alpha(0.3).restart();
+			// Stop simulation after a short time to save CPU
+			setTimeout(() => simulation.stop(), 400); // 400ms burst
+		}
 	}
 
 	function handleZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>) {
@@ -171,8 +224,8 @@
 			const [x, y] = d3.pointer(event, g.node());
 			
 			// Calculate proper start and end positions accounting for node radius
-			const dx = x - dragSourceNode.x;
-			const dy = y - dragSourceNode.y;
+			const dx = x - dragSourceNode.x!;
+			const dy = y - dragSourceNode.y!;
 			const distance = Math.sqrt(dx * dx + dy * dy);
 			
 			if (distance > 0) {
@@ -180,8 +233,8 @@
 				const unitY = dy / distance;
 				
 				// Start from edge of source node
-				const startX = dragSourceNode.x + unitX * nodeRadius;
-				const startY = dragSourceNode.y + unitY * nodeRadius;
+				const startX = dragSourceNode.x! + unitX * nodeRadius;
+				const startY = dragSourceNode.y! + unitY * nodeRadius;
 				
 				// End at cursor position
 				tempEdgeLine
@@ -203,70 +256,18 @@
 		};
 
 		nodes = [...nodes, newNode];
-	}
-
-	// Remove canvas boundaries: allow nodes to be placed anywhere
-	// Remove boundary checks in applyRepulsionForce
-	function applyRepulsionForce(draggedNode: Node, depth: number = 0, forceMultiplier: number = 1) {
-		if (depth >= maxRecursionDepth) return;
 		
-		// Check if this node is connected to others (to skip repulsion)
-		const connectedNodeIds = new Set<string>();
-		edges.forEach(edge => {
-			if (edge.source === draggedNode.id) connectedNodeIds.add(edge.target);
-			if (edge.target === draggedNode.id) connectedNodeIds.add(edge.source);
-		});
-
-		const pushedNodes: Node[] = []; // Track which nodes were moved for recursive calls
-
-		nodes.forEach(otherNode => {
-
-			const dx = otherNode.x - draggedNode.x;
-			const dy = otherNode.y - draggedNode.y;
-			const distance = Math.sqrt(dx * dx + dy * dy);
-
-			// Apply repulsion if nodes are too close
-			if (distance < repelDistance && distance > 0) {
-				const force = repelStrength * forceMultiplier * (repelDistance - distance) / distance;
-				const forceX = dx * force;
-				const forceY = dy * force;
-
-				// Store original position to check if node actually moved
-				const originalX = otherNode.x;
-				const originalY = otherNode.y;
-
-				// Move the other node away
-				otherNode.x += forceX;
-				otherNode.y += forceY;
-
-				// No boundary checks here
-
-				// If the node moved significantly, add it to the list for recursive repulsion
-				const movedDistance = Math.sqrt((otherNode.x - originalX) ** 2 + (otherNode.y - originalY) ** 2);
-				if (movedDistance > 1) { // Only recurse if node moved more than 1 pixel
-					pushedNodes.push(otherNode);
-				}
-			}
-		});
-
-		// Recursively apply forces from pushed nodes (with reduced strength)
-		pushedNodes.forEach(pushedNode => {
-			// Apply recursive repulsion with reduced strength to prevent explosive forces
-			applyRepulsionForce(pushedNode, depth + 1, forceMultiplier * 0.6); // 60% of current strength
-		});
-
-		// Update the nodes array to trigger reactivity (only on the initial call)
-		if (depth === 0) {
-			nodes = [...nodes];
-		}
+		// Restart simulation to include new node
+		restartSimulation();
 	}
 
 	function handleDragStart(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 		// Stop propagation to prevent canvas pan/zoom during node drag
 		event.sourceEvent.stopPropagation();
 		console.log('Drag start on node:', d.label);
-		// Prevent default browser behavior (text selection, etc.)
 		event.sourceEvent.preventDefault();
+		
+		isDraggingNode = true;
 		
 		// Check if this is a right-click for edge creation
 		if (event.sourceEvent.button === 2) {
@@ -274,16 +275,16 @@
 			isDraggingForEdge = true;
 			dragSourceNode = d;
 			
-			// Create temporary edge line with arrow (using regular arrow style)
+			// Create temporary edge line with arrow
 			tempEdgeLine = g.append('line')
 				.attr('class', 'temp-edge')
 				.attr('stroke', '#666')
 				.attr('stroke-width', 2)
 				.attr('marker-end', 'url(#arrowhead)')
-				.attr('x1', d.x + nodeRadius)
-				.attr('y1', d.y)
-				.attr('x2', d.x + nodeRadius + 10)
-				.attr('y2', d.y);
+				.attr('x1', d.x! + nodeRadius)
+				.attr('y1', d.y!)
+				.attr('x2', d.x! + nodeRadius + 10)
+				.attr('y2', d.y!);
 			
 			// Add visual feedback for edge creation
 			d3.select(event.currentTarget).select('circle')
@@ -292,7 +293,16 @@
 		} else {
 			// Regular node drag
 			isDraggingForEdge = false;
-			
+
+			// Fix node position during drag (prevents simulation from moving it)
+			d.fx = d.x;
+			d.fy = d.y;
+
+			// Only run simulation while dragging
+			if (simulation) {
+				simulation.alphaTarget(0.3).restart();
+			}
+
 			// Add visual feedback for node drag
 			d3.select(event.currentTarget).select('circle')
 				.attr('stroke-width', 4)
@@ -302,22 +312,22 @@
 
 	function handleDrag(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 		if (!isDraggingForEdge) {
-			// Regular node dragging
+			// Regular node dragging - update fixed position
+			d.fx = event.x;
+			d.fy = event.y;
 			d.x = event.x;
 			d.y = event.y;
 			
-			// Apply repulsion force to nearby nodes
-			applyRepulsionForce(d);
+			// The simulation will handle repulsion forces automatically
+			// No need for manual force calculations!
 			
-			// Trigger Svelte reactivity by creating a new array
-			nodes = nodes.map(node => node.id === d.id ? { ...node, x: d.x, y: d.y } : node);
 		} else if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
 			// Update temporary edge line during drag
 			const [x, y] = [event.x, event.y];
 			
 			// Calculate proper start and end positions accounting for node radius
-			const dx = x - dragSourceNode.x;
-			const dy = y - dragSourceNode.y;
+			const dx = x - dragSourceNode.x!;
+			const dy = y - dragSourceNode.y!;
 			const distance = Math.sqrt(dx * dx + dy * dy);
 			
 			if (distance > 0) {
@@ -325,8 +335,8 @@
 				const unitY = dy / distance;
 				
 				// Start from edge of source node
-				const startX = dragSourceNode.x + unitX * nodeRadius;
-				const startY = dragSourceNode.y + unitY * nodeRadius;
+				const startX = dragSourceNode.x! + unitX * nodeRadius;
+				const startY = dragSourceNode.y! + unitY * nodeRadius;
 				
 				// End at current drag position
 				tempEdgeLine
@@ -340,6 +350,8 @@
 
 	function handleDragEnd(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 		console.log('Drag end - isDraggingForEdge:', isDraggingForEdge);
+		
+		isDraggingNode = false;
 		
 		// Remove visual feedback
 		d3.select(event.currentTarget).select('circle')
@@ -355,7 +367,6 @@
 			
 			if (targetNode && targetNode.id !== dragSourceNode?.id) {
 				console.log('Creating edge from', dragSourceNode?.label, 'to', targetNode.label);
-				// Create edge between source and target
 				createEdge(dragSourceNode!, targetNode);
 			}
 			
@@ -368,6 +379,16 @@
 			// Reset edge creation state
 			isDraggingForEdge = false;
 			dragSourceNode = null;
+		} else {
+			// Release fixed position - let simulation take over
+			d.fx = null;
+			d.fy = null;
+
+			// Lower alphaTarget to let simulation cool down after drag
+			if (simulation) {
+				simulation.alphaTarget(0);
+				setTimeout(() => simulation.stop(), 200); // Let it cool, then stop
+			}
 		}
 	}
 
@@ -398,6 +419,9 @@
 			};
 			
 			edges = [...edges, newEdge];
+			
+			// Restart simulation to include new edge
+			restartSimulation();
 		}
 	}
 
@@ -405,12 +429,17 @@
 		console.log('Deleting node:', nodeToDelete.label);
 		
 		// Remove all edges connected to this node
-		edges = edges.filter(edge => 
-			edge.source !== nodeToDelete.id && edge.target !== nodeToDelete.id
-		);
+		edges = edges.filter(edge => {
+			const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id;
+			const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id;
+			return sourceId !== nodeToDelete.id && targetId !== nodeToDelete.id;
+		});
 		
 		// Remove the node
 		nodes = nodes.filter(node => node.id !== nodeToDelete.id);
+		
+		// Restart simulation
+		restartSimulation();
 	}
 
 	function deleteEdge(edgeToDelete: Edge) {
@@ -418,6 +447,9 @@
 		
 		// Remove the edge
 		edges = edges.filter(edge => edge.id !== edgeToDelete.id);
+		
+		// Restart simulation
+		restartSimulation();
 	}
 
 	function render() {
@@ -515,10 +547,16 @@
 		});
 		
 		edgeMerge.each(function(d) {
-			const sourceNode = nodes.find(n => n.id === d.source);
-			const targetNode = nodes.find(n => n.id === d.target);
+			// Handle both string and object references for source/target
+			const sourceNode = typeof d.source === 'string' 
+				? nodes.find(n => n.id === d.source) 
+				: d.source;
+			const targetNode = typeof d.target === 'string' 
+				? nodes.find(n => n.id === d.target) 
+				: d.target;
 			
-			if (sourceNode && targetNode) {
+			if (sourceNode && targetNode && sourceNode.x !== undefined && sourceNode.y !== undefined && 
+				targetNode.x !== undefined && targetNode.y !== undefined) {
 				const edgeGroup = d3.select(this);
 				
 				// Calculate edge positions (accounting for node radius)
@@ -568,13 +606,14 @@
 </script>
 
 <svelte:head>
-	<title>Graph Database Editor</title>
-	<meta name="description" content="Graph database WYSIWYG editor" />
+	<title>Graph Database Editor - D3 Force Simulation</title>
+	<meta name="description" content="Graph database WYSIWYG editor using d3-force simulation" />
 </svelte:head>
 
 <section>
-	<h1>Graph Database Editor</h1>
+	<h1>Graph Database Editor - D3 Force Simulation</h1>
 	<p>Click on canvas to add nodes. Drag nodes to move them. Right-click and drag from one node to another to create edges. Middle-click on nodes or edges to delete them.</p>
+	<p class="info">This version uses d3-force simulation for automatic node repulsion and layout.</p>
 	
 	<div class="canvas-container" bind:this={canvasContainer}>
 		<!-- D3 SVG will be inserted here -->
@@ -599,10 +638,17 @@
 	}
 
 	p {
-		margin-bottom: 2rem;
+		margin-bottom: 1rem;
 		color: #666;
 		text-align: center;
 		font-size: 1.1rem;
+	}
+
+	.info {
+		font-style: italic;
+		color: #4285f4;
+		font-weight: bold;
+		margin-bottom: 2rem;
 	}
 
 	.canvas-container {

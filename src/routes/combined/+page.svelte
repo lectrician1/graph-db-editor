@@ -1,0 +1,900 @@
+<script lang="ts">
+import { onMount, onDestroy } from 'svelte';
+import { browser } from '$app/environment';
+import * as d3 from 'd3';
+
+// Node and Edge interfaces (compatible with both modes)
+interface Node extends d3.SimulationNodeDatum {
+	id: string;
+	x: number;
+	y: number;
+	radius: number;
+	label: string;
+	color: string;
+}
+interface Edge extends d3.SimulationLinkDatum<Node> {
+	id: string;
+	source: string | Node;
+	target: string | Node;
+	name: string;
+}
+
+let canvasContainer: HTMLDivElement;
+let svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
+let g: d3.Selection<SVGGElement, unknown, null, undefined>;
+let zoom: d3.ZoomBehavior<SVGSVGElement, unknown>;
+
+let nodes: Node[] = [];
+let edges: Edge[] = [];
+let nodeCounter = 0;
+let edgeCounter = 0;
+
+const canvasWidth = 800;
+const canvasHeight = 600;
+const nodeRadius = 20;
+
+// Mode: 'force' (default) or 'manual'
+let mode: 'force' | 'manual' = 'force';
+
+// --- Shared state for both modes ---
+let isDraggingForEdge = false;
+let dragSourceNode: Node | null = null;
+let tempEdgeLine: d3.Selection<SVGLineElement, unknown, null, undefined> | null = null;
+
+// --- Force simulation state ---
+let simulation: d3.Simulation<Node, Edge>;
+let animationFrameId: number | null = null;
+let isDraggingNode = false;
+
+// --- Manual repulsion state ---
+const repelDistance = 80;
+const repelStrength = 0.3;
+const maxRecursionDepth = 100;
+
+// --- Dialog state for renaming nodes/edges ---
+let showRenameDialog = false;
+let renameType: 'node' | 'edge' | null = null;
+let selectedItem: Node | Edge | null = null;
+let renameValue = '';
+
+// --- Selection state ---
+let selectedNodeIds = new Set<string>();
+let selectedEdgeIds = new Set<string>();
+
+// --- Color palette ---
+const colorPalette = [
+	'#4285f4', // Blue (default)
+	'#ea4335', // Red
+	'#34a853', // Green
+	'#fbbc05', // Yellow
+	'#9c27b0', // Purple
+	'#ff9800', // Orange
+	'#e91e63', // Pink
+	'#00bcd4', // Cyan
+	'#795548', // Brown
+	'#607d8b'  // Blue Grey
+];
+
+function changeSelectedNodesColor(newColor: string) {
+	nodes = nodes.map(node => {
+		if (selectedNodeIds.has(node.id)) {
+			return { ...node, color: newColor };
+		}
+		return node;
+	});
+}
+
+function getSelectedNodeColor(): string | null {
+	if (selectedNodeIds.size === 0) return null;
+	const firstSelectedNode = nodes.find(n => selectedNodeIds.has(n.id));
+	return firstSelectedNode?.color || null;
+}
+
+function selectNode(node: Node, event: MouseEvent) {
+	if (event.shiftKey) {
+		if (selectedNodeIds.has(node.id)) {
+			selectedNodeIds.delete(node.id);
+		} else {
+			selectedNodeIds.add(node.id);
+		}
+	} else {
+		selectedNodeIds = new Set([node.id]);
+		selectedEdgeIds.clear();
+	}
+	nodes = [...nodes]; // trigger re-render
+	updateColorPaletteSelection();
+}
+
+function selectEdge(edge: Edge, event: MouseEvent) {
+	if (event.shiftKey) {
+		if (selectedEdgeIds.has(edge.id)) {
+			selectedEdgeIds.delete(edge.id);
+		} else {
+			selectedEdgeIds.add(edge.id);
+		}
+	} else {
+		selectedEdgeIds = new Set([edge.id]);
+		selectedNodeIds.clear();
+	}
+	edges = [...edges]; // trigger re-render
+	updateColorPaletteSelection();
+}
+
+function clearSelection() {
+	selectedNodeIds.clear();
+	selectedEdgeIds.clear();
+	nodes = [...nodes];
+	edges = [...edges];
+	updateColorPaletteSelection();
+}
+
+function handleKeyDown(event: KeyboardEvent) {
+	if (event.key === 'Delete' || event.key === 'Backspace') {
+		if (selectedNodeIds.size > 0 || selectedEdgeIds.size > 0) {
+			// Delete selected nodes
+			const nodeIdsToDelete = Array.from(selectedNodeIds);
+			for (const nodeId of nodeIdsToDelete) {
+				const node = nodes.find(n => n.id === nodeId);
+				if (node) deleteNode(node);
+			}
+			// Delete selected edges
+			const edgeIdsToDelete = Array.from(selectedEdgeIds);
+			for (const edgeId of edgeIdsToDelete) {
+				const edge = edges.find(e => e.id === edgeId);
+				if (edge) deleteEdge(edge);
+			}
+			clearSelection();
+		}
+	}
+}
+
+// --- Initialization ---
+$: if (svg && (nodes || edges)) {
+	render();
+}
+
+onMount(() => {
+	initializeCanvas();
+	if (mode === 'force') initializeSimulation();
+	spawnTestGraph();
+	if (mode === 'force') restartSimulation();
+	if (browser) {
+		window.addEventListener('keydown', handleKeyDown);
+	}
+});
+
+onDestroy(() => {
+	if (simulation) simulation.stop();
+	if (animationFrameId) cancelAnimationFrame(animationFrameId);
+	if (browser) {
+		window.removeEventListener('keydown', handleKeyDown);
+	}
+});
+
+function spawnTestGraph() {
+	const nNodes = 100;	const centerNode: Node = {
+		id: 'node-0',
+		x: canvasWidth / 2,
+		y: canvasHeight / 2,
+		radius: nodeRadius,
+		label: 'Center',
+		color: '#4285f4'
+	};
+	nodes = [centerNode];
+	edges = [];
+	for (let i = 1; i <= nNodes; i++) {
+		const angle = (2 * Math.PI * i) / nNodes;
+		const x = canvasWidth / 2 + 250 * Math.cos(angle);
+		const y = canvasHeight / 2 + 250 * Math.sin(angle);		const node: Node = {
+			id: `node-${i}`,
+			x,
+			y,
+			radius: nodeRadius,
+			label: `Node ${i}`,
+			color: '#4285f4'
+		};
+		nodes.push(node);
+		edges.push({
+			id: `edge-${i}`,
+			source: centerNode.id,
+			target: node.id,
+			name: `Edge ${i}`
+		});
+	}
+	nodeCounter = nNodes;
+	edgeCounter = nNodes;
+}
+
+function initializeCanvas() {
+	svg = d3.select(canvasContainer)
+		.append('svg')
+		.attr('width', canvasWidth)
+		.attr('height', canvasHeight)
+		.style('border', '2px solid #333')
+		.style('background-color', '#fafafa');
+	g = svg.append('g');
+	const defs = svg.append('defs');
+	defs.append('marker')
+		.attr('id', 'arrowhead')
+		.attr('viewBox', '0 -5 10 10')
+		.attr('refX', 8)
+		.attr('refY', 0)
+		.attr('markerWidth', 6)
+		.attr('markerHeight', 6)
+		.attr('orient', 'auto')
+		.append('path')
+		.attr('d', 'M0,-5L10,0L0,5')
+		.attr('fill', '#666');
+	defs.append('marker')
+		.attr('id', 'temp-arrowhead')
+		.attr('viewBox', '0 -5 10 10')
+		.attr('refX', 8)
+		.attr('refY', 0)
+		.attr('markerWidth', 6)
+		.attr('markerHeight', 6)
+		.attr('orient', 'auto')
+		.append('path')
+		.attr('d', 'M0,-5L10,0L0,5')
+		.attr('fill', '#666');
+	zoom = d3.zoom<SVGSVGElement, unknown>()
+		.scaleExtent([0.1, 5])
+		.on('zoom', handleZoom);
+	svg.call(zoom);	svg.on('click', handleCanvasClick);
+	svg.on('mousemove', handleMouseMove);
+	svg.on('contextmenu', (event) => event.preventDefault());
+	
+	// Add color palette
+	createColorPalette();
+	
+	render();
+}
+
+function createColorPalette() {
+	const paletteGroup = svg.append('g')
+		.attr('class', 'color-palette')
+		.attr('transform', 'translate(20, 20)');
+	
+	// Background for palette
+	paletteGroup.append('rect')
+		.attr('x', -5)
+		.attr('y', -5)
+		.attr('width', 110)
+		.attr('height', 60)
+		.attr('fill', 'rgba(255, 255, 255, 0.9)')
+		.attr('stroke', '#ddd')
+		.attr('stroke-width', 1)
+		.attr('rx', 5);
+	
+	// Title
+	paletteGroup.append('text')
+		.attr('x', 50)
+		.attr('y', 10)
+		.attr('text-anchor', 'middle')
+		.attr('font-size', '11px')
+		.attr('fill', '#666')
+		.text('Node Colors');
+	
+	// Color swatches
+	const swatches = paletteGroup.selectAll('.color-swatch')
+		.data(colorPalette)
+		.enter()
+		.append('g')
+		.attr('class', 'color-swatch')
+		.style('cursor', 'pointer');
+	
+	swatches.append('circle')
+		.attr('cx', (d, i) => 15 + (i % 5) * 20)
+		.attr('cy', (d, i) => 25 + Math.floor(i / 5) * 20)
+		.attr('r', 8)
+		.attr('fill', d => d)
+		.attr('stroke', '#333')
+		.attr('stroke-width', 1);
+	
+	// Selection indicator (initially hidden)
+	paletteGroup.append('circle')
+		.attr('class', 'color-selection-indicator')
+		.attr('r', 10)
+		.attr('fill', 'none')
+		.attr('stroke', '#000')
+		.attr('stroke-width', 2)
+		.style('opacity', 0);
+	
+	// Click handlers for color swatches
+	swatches.on('click', function(event, color) {
+		event.stopPropagation();
+		if (selectedNodeIds.size > 0) {
+			changeSelectedNodesColor(color);
+			updateColorPaletteSelection();
+		}
+	});
+}
+
+function updateColorPaletteSelection() {
+	const selectedColor = getSelectedNodeColor();
+	const indicator = svg.select('.color-selection-indicator');
+	
+	if (selectedColor && selectedNodeIds.size > 0) {
+		const colorIndex = colorPalette.indexOf(selectedColor);
+		if (colorIndex !== -1) {
+			const x = 15 + (colorIndex % 5) * 20;
+			const y = 25 + Math.floor(colorIndex / 5) * 20;
+			indicator
+				.attr('cx', 20 + x)
+				.attr('cy', 20 + y)
+				.style('opacity', 1);
+		} else {
+			indicator.style('opacity', 0);
+		}
+	} else {
+		indicator.style('opacity', 0);
+	}
+}
+
+function initializeSimulation() {
+	simulation = d3.forceSimulation<Node>(nodes)
+		.force('charge', d3.forceManyBody().strength(-300).distanceMax(80).distanceMin(5))
+		.force('collision', d3.forceCollide().radius(nodeRadius + 2).strength(0.7))
+		.alphaDecay(0.25)
+		.velocityDecay(0.7)
+		.on('tick', onSimulationTick);
+	simulation.stop();
+}
+
+function onSimulationTick() {
+	if (!animationFrameId) {
+		animationFrameId = requestAnimationFrame(() => {
+			animationFrameId = null;
+			render();
+		});
+	}
+}
+
+function restartSimulation() {
+	if (simulation) {
+		simulation.nodes(nodes);
+		simulation.force('collision', d3.forceCollide().radius(nodeRadius + 2).strength(0.7));
+		simulation.alpha(0.3).restart();
+		// Removed auto-stop timeout to keep simulation active
+	}
+}
+
+function switchMode(newMode: 'force' | 'manual') {
+	if (mode === newMode) return;
+	mode = newMode;
+	if (mode === 'force') {
+		// Always re-create simulation from current nodes
+		initializeSimulation();
+		simulation.nodes(nodes);
+		simulation.force('collision', d3.forceCollide().radius(nodeRadius + 2).strength(0.7));
+		restartSimulation();
+	} else {
+		if (simulation) simulation.stop();
+	}
+	render();
+}
+
+function handleZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>) {
+	g.attr('transform', event.transform.toString());
+}
+
+function handleCanvasClick(event: MouseEvent) {
+	if (event.defaultPrevented) return;
+	if (event.target !== svg.node()) return;
+	const [x, y] = d3.pointer(event, g.node());
+	addNode(x, y);
+	clearSelection();
+}
+
+function handleMouseMove(event: MouseEvent) {
+	if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
+		const [x, y] = d3.pointer(event, g.node());
+		const dx = x - dragSourceNode.x;
+		const dy = y - dragSourceNode.y;
+		const distance = Math.sqrt(dx * dx + dy * dy);
+		if (distance > 0) {
+			const unitX = dx / distance;
+			const unitY = dy / distance;
+			const startX = dragSourceNode.x + unitX * nodeRadius;
+			const startY = dragSourceNode.y + unitY * nodeRadius;
+			tempEdgeLine
+				.attr('x1', startX)
+				.attr('y1', startY)
+				.attr('x2', x)
+				.attr('y2', y);
+		}
+	}
+}
+
+function addNode(x: number, y: number) {
+	const newNode: Node = {
+		id: `node-${++nodeCounter}`,
+		x,
+		y,
+		radius: nodeRadius,
+		label: `Node ${nodeCounter}`,
+		color: '#4285f4'
+	};
+	nodes = [...nodes, newNode];
+	restartSimulation();
+}
+
+function applyRepulsionForce(draggedNode: Node, depth: number = 0, forceMultiplier: number = 1) {
+	if (depth >= maxRecursionDepth) return;
+	const connectedNodeIds = new Set<string>();
+	edges.forEach(edge => {
+		if (edge.source === draggedNode.id) connectedNodeIds.add(edge.target as string);
+		if (edge.target === draggedNode.id) connectedNodeIds.add(edge.source as string);
+	});
+	const pushedNodes: Node[] = [];
+	nodes.forEach(otherNode => {
+		const dx = otherNode.x - draggedNode.x;
+		const dy = otherNode.y - draggedNode.y;
+		const distance = Math.sqrt(dx * dx + dy * dy);
+		if (distance < repelDistance && distance > 0) {
+			const force = repelStrength * forceMultiplier * (repelDistance - distance) / distance;
+			const forceX = dx * force;
+			const forceY = dy * force;
+			const originalX = otherNode.x;
+			const originalY = otherNode.y;
+			otherNode.x += forceX;
+			otherNode.y += forceY;
+			const movedDistance = Math.sqrt((otherNode.x - originalX) ** 2 + (otherNode.y - originalY) ** 2);
+			if (movedDistance > 1) pushedNodes.push(otherNode);
+		}
+	});
+	pushedNodes.forEach(pushedNode => {
+		applyRepulsionForce(pushedNode, depth + 1, forceMultiplier * 0.6);
+	});
+	if (depth === 0) nodes = [...nodes];
+}
+
+function handleDragStart(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
+	event.sourceEvent.stopPropagation();
+	event.sourceEvent.preventDefault();
+	isDraggingNode = true;
+	if (event.sourceEvent.button === 2) {
+		isDraggingForEdge = true;
+		dragSourceNode = d;
+		tempEdgeLine = g.append('line')
+			.attr('class', 'temp-edge')
+			.attr('stroke', '#666')
+			.attr('stroke-width', 2)
+			.attr('marker-end', 'url(#arrowhead)')
+			.attr('x1', d.x + nodeRadius)
+			.attr('y1', d.y)
+			.attr('x2', d.x + nodeRadius + 10)
+			.attr('y2', d.y);
+		d3.select(event.currentTarget).select('circle')
+			.attr('stroke-width', 4)
+			.attr('stroke', '#ff6b6b');
+	} else {
+		isDraggingForEdge = false;
+		if (mode === 'force') {
+			d.fx = d.x;
+			d.fy = d.y;
+			if (simulation) simulation.alphaTarget(0.3).restart();
+		} else {
+			// manual mode: just highlight
+		}
+		d3.select(event.currentTarget).select('circle')
+			.attr('stroke-width', 4)
+			.attr('stroke', '#ff6b6b');
+	}
+}
+
+function handleDrag(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
+	if (!isDraggingForEdge) {
+		if (mode === 'force') {
+			d.fx = event.x;
+			d.fy = event.y;
+			d.x = event.x;
+			d.y = event.y;
+		} else {
+			d.x = event.x;
+			d.y = event.y;
+			applyRepulsionForce(d);
+			nodes = nodes.map(node => node.id === d.id ? { ...node, x: d.x, y: d.y } : node);
+		}
+	} else if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
+		const [x, y] = [event.x, event.y];
+		const dx = x - dragSourceNode.x;
+		const dy = y - dragSourceNode.y;
+		const distance = Math.sqrt(dx * dx + dy * dy);
+		if (distance > 0) {
+			const unitX = dx / distance;
+			const unitY = dy / distance;
+			const startX = dragSourceNode.x + unitX * nodeRadius;
+			const startY = dragSourceNode.y + unitY * nodeRadius;
+			tempEdgeLine
+				.attr('x1', startX)
+				.attr('y1', startY)
+				.attr('x2', x)
+				.attr('y2', y);
+		}
+	}
+}
+
+function handleDragEnd(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
+	isDraggingNode = false;
+	d3.select(event.currentTarget).select('circle')
+		.attr('stroke-width', 2)
+		.attr('stroke', '#fff');
+	if (isDraggingForEdge) {
+		const targetElement = document.elementFromPoint(event.sourceEvent.clientX, event.sourceEvent.clientY);
+		const targetNode = findNodeFromElement(targetElement);
+		if (targetNode && targetNode.id !== dragSourceNode?.id) {
+			createEdge(dragSourceNode!, targetNode);
+		}
+		if (tempEdgeLine) {
+			tempEdgeLine.remove();
+			tempEdgeLine = null;
+		}
+		isDraggingForEdge = false;
+		dragSourceNode = null;
+	} else {
+		if (mode === 'force') {
+			d.fx = null;
+			d.fy = null;
+			if (simulation) {
+				simulation.alphaTarget(0);
+				setTimeout(() => simulation.stop(), 200);
+			}
+		}
+	}
+}
+
+function findNodeFromElement(element: Element | null): Node | null {
+	if (!element) return null;
+	let current = element;
+	while (current && current !== svg.node()) {
+		if (current.classList && current.classList.contains('node')) {
+			const nodeData = d3.select(current).datum() as Node;
+			return nodeData;
+		}
+		current = current.parentElement;
+	}
+	return null;
+}
+
+function createEdge(source: Node, target: Node) {
+	const edgeName = prompt(`Enter edge name (from ${source.label} to ${target.label}):`);
+	if (edgeName) {
+		const newEdge: Edge = {
+			id: `edge-${++edgeCounter}`,
+			source: source.id,
+			target: target.id,
+			name: edgeName
+		};
+		edges = [...edges, newEdge];
+		if (mode === 'force') restartSimulation();
+	}
+}
+
+function deleteNode(nodeToDelete: Node) {
+	edges = edges.filter(edge => {
+		const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id;
+		const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id;
+		return sourceId !== nodeToDelete.id && targetId !== nodeToDelete.id;
+	});
+	nodes = nodes.filter(node => node.id !== nodeToDelete.id);
+	if (mode === 'force') restartSimulation();
+}
+
+function deleteEdge(edgeToDelete: Edge) {
+	edges = edges.filter(edge => edge.id !== edgeToDelete.id);
+	if (mode === 'force') restartSimulation();
+}
+
+function render() {
+	// Render nodes
+	const nodeSelection = g.selectAll<SVGGElement, Node>('.node')
+		.data(nodes, d => d.id);
+
+	const nodeEnter = nodeSelection.enter()
+		.append('g')
+		.attr('class', 'node')
+		.attr('transform', d => `translate(${d.x}, ${d.y})`);
+	nodeEnter.append('circle')
+		.attr('r', d => d.radius)
+		.attr('fill', d => d.color)
+		.attr('stroke', '#fff')
+		.attr('stroke-width', 2);
+
+	nodeEnter.append('text')
+		.attr('text-anchor', 'middle')
+		.attr('dy', '.35em')
+		.attr('fill', 'white')
+		.attr('font-size', '12px')
+		.attr('font-weight', 'bold')
+		.text(d => d.label);
+
+	// Merge enter and update
+	const nodeMerge = nodeEnter.merge(nodeSelection);
+
+	// Drag & deletion
+	const drag = d3.drag<SVGGElement, Node>()
+		.filter(e => e.button === 0 || e.button === 2)
+		.on('start', handleDragStart)
+		.on('drag', handleDrag)
+		.on('end', handleDragEnd);
+	nodeMerge.call(drag);	nodeMerge.on('mousedown', (e, d) => {
+		if (e.button === 1) {
+			e.preventDefault(); e.stopPropagation(); deleteNode(d);
+		}
+	});
+	// Single click: select node
+	nodeMerge.on('click', (e, d) => {
+		if (e.button === 0) {
+			e.preventDefault(); e.stopPropagation(); selectNode(d, e);
+		}
+	});
+	// Double click: open rename dialog
+	nodeMerge.on('dblclick', (e, d) => {
+		if (e.button === 0) {
+			e.preventDefault(); e.stopPropagation(); openRenameDialog(d, 'node');
+		}
+	});
+	// Highlight selected nodes
+	nodeMerge.select('circle')
+		.attr('fill', d => d.color)
+		.attr('stroke', d => selectedNodeIds.has(d.id) ? '#ffb300' : '#fff')
+		.attr('stroke-width', d => selectedNodeIds.has(d.id) ? 4 : 2);
+
+	// Update positions
+	nodeMerge.attr('transform', d => `translate(${d.x}, ${d.y})`);
+	nodeSelection.exit().remove();
+
+	// Render edges
+	const edgeSelection = g.selectAll<SVGGElement, Edge>('.edge')
+		.data(edges, d => d.id);
+
+	const edgeEnter = edgeSelection.enter()
+		.append('g')
+		.attr('class', 'edge');
+
+	edgeEnter.append('line')
+		.attr('stroke', '#666')
+		.attr('stroke-width', 2)
+		.attr('marker-end', 'url(#arrowhead)');
+
+	edgeEnter.append('rect')
+		.attr('fill', 'white')
+		.attr('stroke', '#666')
+		.attr('stroke-width', 1)
+		.attr('rx', 3);
+
+	edgeEnter.append('text')
+		.attr('text-anchor', 'middle')
+		.attr('dy', '.35em')
+		.attr('font-size', '10px')
+		.attr('fill', '#333')
+		.text(d => d.name);
+	const edgeMerge = edgeEnter.merge(edgeSelection);
+	edgeMerge.on('mousedown', (e, d) => {
+		if (e.button === 1) { e.preventDefault(); e.stopPropagation(); deleteEdge(d); }
+	});
+	// Single click: select edge
+	edgeMerge.on('click', (e, d) => {
+		if (e.button === 0) {
+			e.preventDefault(); e.stopPropagation(); selectEdge(d, e);
+		}
+	});
+	// Double click: open rename dialog
+	edgeMerge.on('dblclick', (e, d) => {
+		if (e.button === 0) {
+			e.preventDefault(); e.stopPropagation(); openRenameDialog(d, 'edge');
+		}
+	});
+
+	// Highlight selected edges
+	edgeMerge.select('line')
+		.attr('stroke', d => selectedEdgeIds.has(d.id) ? '#ffb300' : '#666')
+		.attr('stroke-width', d => selectedEdgeIds.has(d.id) ? 4 : 2);
+
+	edgeMerge.each(function(d) {
+		const edgeGroup = d3.select(this);
+		const sourceNode = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
+		const targetNode = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
+		if (sourceNode && targetNode && sourceNode.x !== undefined && sourceNode.y !== undefined && targetNode.x !== undefined && targetNode.y !== undefined) {
+			const dx = targetNode.x - sourceNode.x;
+			const dy = targetNode.y - sourceNode.y;
+			const dist = Math.sqrt(dx*dx + dy*dy);
+			if (dist > 0) {
+				const ux = dx / dist, uy = dy / dist;
+				const startX = sourceNode.x + ux * nodeRadius;
+				const startY = sourceNode.y + uy * nodeRadius;
+				const endX = targetNode.x - ux * nodeRadius;
+				const endY = targetNode.y - uy * nodeRadius;
+				edgeGroup.select('line')
+					.attr('x1', startX).attr('y1', startY)
+					.attr('x2', endX).attr('y2', endY);
+				const midX = (startX + endX)/2, midY = (startY + endY)/2;
+				const text = edgeGroup.select('text');
+				const bbox = (text.node() as SVGTextElement).getBBox();
+				edgeGroup.select('rect')
+					.attr('x', midX - bbox.width/2 -2)
+					.attr('y', midY - bbox.height/2 -1)
+					.attr('width', bbox.width+4)
+					.attr('height', bbox.height+2);
+				text.attr('x', midX).attr('y', midY);
+			}
+		}
+	});
+	edgeSelection.exit().remove();
+}
+
+function openRenameDialog(item: Node | Edge, type: 'node' | 'edge') {
+    selectedItem = item;
+    renameType = type;
+    renameValue = type === 'node' ? (item as Node).label : (item as Edge).name;
+    showRenameDialog = true;
+}
+
+function closeRenameDialog() {
+    showRenameDialog = false;
+    selectedItem = null;
+    renameType = null;
+    renameValue = '';
+}
+
+function confirmRename() {
+    if (selectedItem && renameType) {
+        if (renameType === 'node') {
+            (selectedItem as Node).label = renameValue;
+            nodes = [...nodes];
+        } else if (renameType === 'edge') {
+            (selectedItem as Edge).name = renameValue;
+            edges = [...edges];
+        }
+    }
+    closeRenameDialog();
+}
+</script>
+
+<svelte:head>
+	<title>Graph Database Editor (Combined)</title>
+	<meta name="description" content="Graph database WYSIWYG editor with force/manual modes" />
+</svelte:head>
+
+<section>
+	<h1>Graph Database Editor (Force/Manual Switch)</h1>	<p>
+		Click on canvas to add nodes. Drag nodes to move them. Right-click and drag from one node to another to create edges. Click to select nodes/edges (Shift+click for multi-select). Double-click to rename. Press Delete to remove selected items. Middle-click to instantly delete.
+	</p>
+	<div style="margin-bottom:1rem;">
+		<label><input type="radio" bind:group={mode} value="force" on:change={() => switchMode('force')}> Global repulsion (default)</label>
+		<label style="margin-left:2em;"><input type="radio" bind:group={mode} value="manual" on:change={() => switchMode('manual')}> Local Repulsion</label>
+	</div>
+	<div class="canvas-container" bind:this={canvasContainer}>
+		<!-- D3 SVG will be inserted here -->
+	</div>
+
+	{#if showRenameDialog}
+		<div class="modal-backdrop">
+			<div class="modal-dialog">
+				<h2>Rename {renameType === 'node' ? 'Node' : 'Edge'}</h2>
+				<input type="text" bind:value={renameValue} autofocus on:keydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') closeRenameDialog(); }} />
+				<div class="modal-actions">
+					<button on:click={confirmRename}>OK</button>
+					<button on:click={closeRenameDialog}>Cancel</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+</section>
+
+<style>
+/* ...existing styles from your editors... */
+section {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	padding: 2rem;
+	min-height: 100vh;
+}
+h1 {
+	margin-bottom: 1rem;
+	color: #333;
+	font-size: 2rem;
+	text-align: center;
+}
+p {
+	margin-bottom: 1rem;
+	color: #666;
+	text-align: center;
+	font-size: 1.1rem;
+}
+.canvas-container {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	padding: 1rem;
+	background: #f5f5f5;
+	border-radius: 8px;
+	box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+:global(.node) {
+	cursor: grab;
+	user-select: none;
+}
+:global(.node:active) {
+	cursor: grabbing;
+}
+:global(.node:hover circle) {
+	fill: #1a73e8 !important;
+}
+:global(.node text) {
+	pointer-events: none;
+	user-select: none;
+}
+:global(.edge) {
+	cursor: pointer;
+}
+:global(.edge:hover) {
+	opacity: 0.8;
+}
+:global(.temp-edge) {
+	pointer-events: none;
+}
+:global(.color-palette) {
+	position: relative;
+	z-index: 100;
+}
+:global(.color-swatch:hover circle) {
+	stroke-width: 2 !important;
+	stroke: #000 !important;
+}
+.modal-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0,0,0,0.25);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 1000;
+}
+.modal-dialog {
+	background: #fff;
+	padding: 2rem 1.5rem 1.5rem 1.5rem;
+	border-radius: 8px;
+	box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+	min-width: 300px;
+	max-width: 90vw;
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+}
+.modal-dialog h2 {
+	margin-bottom: 1rem;
+	font-size: 1.2rem;
+	color: #333;
+}
+.modal-dialog input[type="text"] {
+	padding: 0.5rem;
+	font-size: 1rem;
+	border: 1px solid #ccc;
+	border-radius: 4px;
+	margin-bottom: 1rem;
+}
+.modal-actions {
+	display: flex;
+	gap: 1rem;
+	justify-content: flex-end;
+}
+.modal-actions button {
+	padding: 0.5rem 1.2rem;
+	font-size: 1rem;
+	border: none;
+	border-radius: 4px;
+	background: #4285f4;
+	color: #fff;
+	cursor: pointer;
+	transition: background 0.2s;
+}
+.modal-actions button:last-child {
+	background: #aaa;
+}
+.modal-actions button:hover {
+	background: #1a73e8;
+}
+</style>
