@@ -37,6 +37,10 @@ const nodePadding = 8; // Padding around text inside the circle
 // Mode: 'force' (default) or 'manual'
 let mode: 'force' | 'manual' = 'force';
 
+// --- Selection Box State ---
+let selection: d3.Selection<SVGPathElement, unknown, null, undefined>;
+let isSelecting = false;
+let selectionStart: [number, number] = [0, 0];
 // --- Shared state for both modes ---
 let isDraggingForEdge = false;
 let dragSourceNode: Node | null = null;
@@ -61,6 +65,10 @@ const repelDistance = 80;
 const repelStrength = 0.3;
 
 // --- Text Measurement Function ---
+function rect(x: number, y: number, w: number, h: number) {
+	return "M" + [x, y] + " l" + [w, 0] + " l" + [0, h] + " l" + [-w, 0] + "z";
+}
+
 function calculateNodeRadius(text: string): number {
 	// Create a temporary text element to measure text dimensions
 	const tempText = svg.append('text')
@@ -395,8 +403,13 @@ function initializeCanvas() {
 		.attr('width', canvasWidth)
 		.attr('height', canvasHeight)
 		.style('border', '2px solid #333')
-		.style('background-color', '#fafafa');
-	g = svg.append('g');
+		.style('background-color', '#fafafa');	g = svg.append('g');
+	
+	// Add selection path element
+	selection = svg.append("path")
+		.attr("class", "selection")
+		.attr("visibility", "hidden");
+	
 	const defs = svg.append('defs');
 	defs.append('marker')
 		.attr('id', 'arrowhead')
@@ -419,7 +432,9 @@ function initializeCanvas() {
 		.attr('orient', 'auto')
 		.append('path')
 		.attr('d', 'M0,-5L10,0L0,5')
-		.attr('fill', '#666');	zoom = d3.zoom<SVGSVGElement, unknown>()
+		.attr('fill', '#666');
+
+	zoom = d3.zoom<SVGSVGElement, unknown>()
 		.scaleExtent([0.1, 5])
 		.filter((event) => {
 			// Only allow zooming/panning with middle mouse button (button === 1) or wheel events
@@ -436,23 +451,114 @@ function initializeCanvas() {
 		.on('zoom', handleZoom);
 	svg.call(zoom);
 	
-	// Use click events instead of mousedown, and set up proper event handling
-	svg.on('click', handleCanvasClick);
-	svg.on('contextmenu', handleCanvasClick); // Handle right-clicks via context menu
-	svg.on('mousemove', handleMouseMove);
-	
-	// Additional prevention of middle mouse button default behavior for non-zoom events
-	svg.on('auxclick', (event) => {
-		if (event.button === 1) {
-			event.preventDefault();
-			event.stopPropagation();
-		}
-	});
-	
+	svg.on('mousedown.selection', handleCanvasMouseDown); // Namespaced mousedown for selection
+	svg.on('mousemove.selection', handleMouseMove);     // Namespaced mousemove for selection
+	svg.on('mouseup.selection', handleCanvasMouseUp);       // Namespaced mouseup for selection
+	svg.on('contextmenu', handleCanvasClick); // For right-click actions (e.g., new node)
+
 	// Add color palette
 	createColorPalette();
 	
 	render();
+}
+
+function handleCanvasMouseDown(event: MouseEvent) {
+	// Only proceed if the mousedown is directly on the SVG canvas (not on a node/edge or other element)
+	// and it's a left click (button 0)
+	if (event.target !== svg.node() || event.button !== 0) {
+		return;
+	}
+
+	event.preventDefault(); // Prevent default browser actions like text selection
+	event.stopPropagation(); // Crucially, stop the event from propagating to the zoom behavior
+
+	isSelecting = true;
+	const start = d3.pointer(event, svg.node()); // Get coordinates relative to the SVG element
+	selectionStart = start;
+	
+	// Start the selection box
+	selection.attr("d", rect(start[0], start[1], 0, 0))
+		.attr("visibility", "visible");
+
+	// If not holding Shift, clear any existing selection
+	if (!event.shiftKey) {
+		clearSelection(); // This function should handle re-rendering
+	} else {
+		render(); // If shift is held, still need to render to show the selection box potentially
+	}
+}
+
+function handleCanvasMouseUp(event: MouseEvent) {
+	if (!isSelecting || event.button !== 0) {
+		// If not actively selecting or not a left mouse button up, reset if needed and exit
+		if (isSelecting) {
+			isSelecting = false;
+			selection.attr("visibility", "hidden");
+			render(); // Ensure selection box is hidden
+		}
+		return;
+	}
+
+	isSelecting = false;
+	selection.attr("visibility", "hidden"); // Hide the box first
+
+	const end = d3.pointer(event, svg.node());
+
+	// Check if it was a click (minimal drag) vs a drag for selection
+	const movedDistance = Math.sqrt(
+		Math.pow(end[0] - selectionStart[0], 2) + Math.pow(end[1] - selectionStart[1], 2)
+	);
+
+	if (movedDistance < clickThreshold) {
+		// It was a click on the canvas, not a drag for selection box
+		if (!event.shiftKey) {
+			clearSelection(); // Clears selection and re-renders
+		} else {
+			render(); // Re-render if shift was held, to ensure UI is up-to-date
+		}
+	} else {
+		// It was a drag for selection box
+		const selX = Math.min(selectionStart[0], end[0]);
+		const selY = Math.min(selectionStart[1], end[1]);
+		const selWidth = Math.abs(end[0] - selectionStart[0]);
+		const selHeight = Math.abs(end[1] - selectionStart[1]);
+
+		const newlySelectedNodeIds = new Set<string>();
+		nodes.forEach(node => {
+			// Convert node coordinates from g-space to svg-space
+			const transform = d3.zoomTransform(svg.node()!);
+			const nodeX = transform.applyX(node.x);
+			const nodeY = transform.applyY(node.y);
+			
+			if (
+				nodeX >= selX &&
+				nodeX <= selX + selWidth &&
+				nodeY >= selY &&
+				nodeY <= selY + selHeight
+			) {
+				newlySelectedNodeIds.add(node.id);
+			}
+		});
+
+		if (!event.shiftKey) {
+			selectedNodeIds.clear();
+			selectedEdgeIds.clear(); // Edges are not selected by box, but clear for consistency
+			newlySelectedNodeIds.forEach(id => selectedNodeIds.add(id));
+		} else {
+			// Additive selection with Shift
+			newlySelectedNodeIds.forEach(id => {
+				if (selectedNodeIds.has(id)) {
+					// Optionally, Shift+Drag could toggle, but typically it adds
+					// selectedNodeIds.delete(id); // To toggle
+				} else {
+					selectedNodeIds.add(id);
+				}
+			});
+		}
+		selectedNodeIds = new Set(selectedNodeIds); // Trigger Svelte reactivity
+		updateColorPaletteSelection();
+		render();
+	}
 }
 
 function createColorPalette() {
@@ -584,38 +690,38 @@ function handleZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>) {
 }
 
 function handleCanvasClick(event: MouseEvent) {
-	console.log('Canvas clicked, clearing selection');
-	if (event.defaultPrevented) return;
-	if (event.target !== svg.node()) return;
-	
-	// Handle context menu (right-click)
+	// This function now primarily handles contextmenu events on the canvas
 	if (event.type === 'contextmenu') {
-		event.preventDefault(); // Always prevent context menu
+		// Only show create node dialog if right-click is directly on SVG background or canvas container
+		if (event.target !== svg.node() && event.target !== canvasContainer) {
+			// Check if the target is part of a node or edge
+			if (event.target instanceof Element && (event.target.closest('.node') || event.target.closest('.edge'))) {
+				return; // Do nothing if context menu is on a node or edge, let their handlers (if any) take over.
+			}
+		}
 		
-		// If we just completed edge creation, don't show the node creation dialog
+		event.preventDefault();
 		if (justCompletedEdgeCreation) {
 			console.log('Blocking context menu after edge creation');
 			return;
 		}
-		
 		const [x, y] = d3.pointer(event, g.node());
-		
-		// Store position and show create node dialog
 		pendingNodePosition = { x, y };
 		createNodeName = ''; // Ensure input starts blank
 		showCreateNodeDialog = true;
 		
-		clearSelection();
-	} else if (event.type === 'click' && event.button === 0) {
-		// Left-click: Clear selection when clicking on empty canvas
-		clearSelection();
+		if (!event.shiftKey) { // Clear selection unless shift is held
+			clearSelection();
+		}
 	}
-	
-	console.log('Canvas clicked, clearing selection');
+	// Left-click logic on canvas is now handled by handleCanvasMouseDown/Up
 }
 
 function handleMouseMove(event: MouseEvent) {
-	if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
+	if (isSelecting) {
+		const moved = d3.pointer(event, svg.node());
+		selection.attr("d", rect(selectionStart[0], selectionStart[1], moved[0] - selectionStart[0], moved[1] - selectionStart[1]));
+	} else if (isDraggingForEdge && dragSourceNode && tempEdgeLine) {
 		const [x, y] = d3.pointer(event, g.node());
 		const dx = x - dragSourceNode.x;
 		const dy = y - dragSourceNode.y;
@@ -1310,7 +1416,7 @@ function confirmRename() {
 		</span>
 		
 		{#if lastSaved}
-			<span style="margin-left: 1rem; font-size: 0.8rem; color: #999;">
+			<span style="margin-left: 1rem, font-size: 0.8rem, color: #999;">
 				Last saved: {lastSaved}
 			</span>
 		{/if}
@@ -1319,10 +1425,9 @@ function confirmRename() {
 	<div style="margin-bottom:1rem;">
 		<label><input type="radio" bind:group={mode} value="force" on:change={() => switchMode('force')}> Global repulsion (default)</label>
 		<label style="margin-left:2em;"><input type="radio" bind:group={mode} value="manual" on:change={() => switchMode('manual')}> Local Repulsion</label>
-	</div>
-	<div class="canvas-container" bind:this={canvasContainer}>
+	</div>	<div class="canvas-container" bind:this={canvasContainer}>
 		<!-- D3 SVG will be inserted here -->
-	</div>	{#if showRenameDialog}
+	</div>{#if showRenameDialog}
 		<div class="modal-backdrop" on:contextmenu|preventDefault>
 			<div class="modal-dialog" on:contextmenu|preventDefault>
 				<h2>Rename {renameType === 'node' ? 'Node' : 'Edge'}</h2>
@@ -1415,6 +1520,14 @@ p {
 :global(.color-swatch:hover circle) {
 	stroke-width: 2 !important;
 	stroke: #000 !important;
+}
+:global(.selection) {
+	fill: #ADD8E6;
+	stroke: #ADD8E6;
+	fill-opacity: 0.3;
+	stroke-opacity: 0.7;
+	stroke-width: 2;
+	stroke-dasharray: 5, 5;
 }
 .modal-backdrop {
 	position: fixed;
