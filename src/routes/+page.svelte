@@ -108,6 +108,11 @@ let showCreateNodeDialog = false;
 let pendingNodePosition: { x: number; y: number } | null = null;
 let createNodeName = '';
 
+// --- Edge creation dialog state ---
+let showCreateEdgeDialog = false;
+let pendingEdge: { source: Node; target: Node } | null = null;
+let createEdgeName = '';
+
 // --- Dialog state for creating edge+node ---
 let showCreateEdgeAndNodeDialog = false;
 let pendingEdgeSourceNode: Node | null = null;
@@ -779,6 +784,24 @@ function closeCreateNodeDialog() {
 	createNodeName = '';
 }
 
+function confirmCreateEdge() {
+	if (pendingEdge && createEdgeName.trim()) {
+		const newEdge: Edge = {
+			id: `edge-${++edgeCounter}`,
+			source: pendingEdge.source.id,
+			target: pendingEdge.target.id,
+			name: createEdgeName.trim()
+		};
+		edges = [...edges, newEdge];
+		if (mode === 'force') restartSimulation();
+	}
+	closeCreateEdgeDialog();
+}
+
+function createEdgeFromDialog() {
+	confirmCreateEdge();
+}
+
 function openCreateEdgeAndNodeDialog(sourceNode: Node, start: {x: number, y: number}, end: {x: number, y: number}) {
     showCreateEdgeAndNodeDialog = true;
     pendingEdgeSourceNode = sourceNode;
@@ -1104,17 +1127,16 @@ function findNodeFromElement(element: Element | null): Node | null {
 }
 
 function createEdge(source: Node, target: Node) {
-	const edgeName = prompt(`Enter edge name (from ${source.label} to ${target.label}):`);
-	if (edgeName) {
-		const newEdge: Edge = {
-			id: `edge-${++edgeCounter}`,
-			source: source.id,
-			target: target.id,
-			name: edgeName
-		};
-		edges = [...edges, newEdge];
-		if (mode === 'force') restartSimulation();
-	}
+	// Open dialog instead of using prompt()
+	pendingEdge = { source, target };
+	createEdgeName = ''; // Clear previous input
+	showCreateEdgeDialog = true;
+}
+
+function closeCreateEdgeDialog() {
+	showCreateEdgeDialog = false;
+	pendingEdge = null;
+	createEdgeName = '';
 }
 
 function deleteNode(nodeToDelete: Node) {
@@ -1508,6 +1530,17 @@ function confirmRename() {
 				<div class="modal-actions">
 					<button on:click={createNodeFromDialog}>OK</button>
 					<button on:click={closeCreateNodeDialog}>Cancel</button>
+				</div>
+			</div>
+		</div>
+	{/if}{#if showCreateEdgeDialog}
+		<div class="modal-backdrop" on:contextmenu|preventDefault>
+			<div class="modal-dialog" on:contextmenu|preventDefault>
+				<h2>Create New Edge</h2>
+				<input type="text" bind:value={createEdgeName} placeholder="Enter edge name" autofocus on:keydown={(e) => { if (e.key === 'Enter') createEdgeFromDialog(); if (e.key === 'Escape') closeCreateEdgeDialog(); }} />
+				<div class="modal-actions">
+					<button on:click={createEdgeFromDialog}>OK</button>
+					<button on:click={closeCreateEdgeDialog}>Cancel</button>
 				</div>
 			</div>
 		</div>
