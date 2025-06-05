@@ -760,21 +760,25 @@ function handleMouseMove(event: MouseEvent) {
 }
 
 function addNode(x: number, y: number, label?: string) {
-	const nodeLabel = label || `Node ${nodeCounter + 1}`;
-	const radius = calculateNodeRadius(nodeLabel);
-	
-	const newNode: Node = {
-		id: `node-${++nodeCounter}`,
-		x,
-		y,
-		radius: radius,
-		label: nodeLabel,
-		color: '#4285f4',
-		properties: {} // Always initialize properties
-	};
-	nodes = [...nodes, newNode];
-	restartSimulation();
-	return newNode;
+    const nodeLabel = label || `Node ${nodeCounter + 1}`;
+    const radius = calculateNodeRadius(nodeLabel);
+    const now = new Date().toISOString(); // Track creation time
+
+    const newNode: Node = {
+        id: `node-${++nodeCounter}`,
+        x,
+        y,
+        radius: radius,
+        label: nodeLabel,
+        color: '#4285f4',
+        properties: {
+            createdAt: now,
+            editedAt: now
+        } // Always initialize properties with timestamps
+    };
+    nodes = [...nodes, newNode];
+    restartSimulation();
+    return newNode;
 }
 
 function createNodeFromDialog() {
@@ -793,38 +797,46 @@ function closeCreateNodeDialog() {
 }
 
 function confirmCreateEdge() {
-	if (pendingEdge && createEdgeName.trim()) {
-		const newEdge: Edge = {
-			id: `edge-${++edgeCounter}`,
-			source: pendingEdge.source.id,
-			target: pendingEdge.target.id,
-			name: createEdgeName.trim(),
-			properties: {} // Always initialize properties
-		};
-		edges = [...edges, newEdge];
-		if (mode === 'force') restartSimulation();
-	}
-	closeCreateEdgeDialog();
+    if (pendingEdge && createEdgeName.trim()) {
+        const now = new Date().toISOString();
+        const newEdge: Edge = {
+            id: `edge-${++edgeCounter}`,
+            source: pendingEdge.source.id,
+            target: pendingEdge.target.id,
+            name: createEdgeName.trim(),
+            properties: {
+                createdAt: now,
+                editedAt: now
+            } // Always initialize properties with timestamps
+        };
+        edges = [...edges, newEdge];
+        if (mode === 'force') restartSimulation();
+    }
+    closeCreateEdgeDialog();
 }
 
 function createEdgeFromDialog() {
-	confirmCreateEdge();
-	if (!createEdgeName.trim() || !pendingEdge) {
-		closeCreateEdgeDialog();
-		return;
-	}
-	edges = [
-		...edges,
-		{
-			id: `edge-${edgeCounter++}`,
-			source: pendingEdge.source.id,
-			target: pendingEdge.target.id,
-			name: createEdgeName,
-			properties: {} // Always initialize properties
-		}
-	];
-	closeCreateEdgeDialog();
-	render();
+    confirmCreateEdge();
+    if (!createEdgeName.trim() || !pendingEdge) {
+        closeCreateEdgeDialog();
+        return;
+    }
+    const now = new Date().toISOString();
+    edges = [
+        ...edges,
+        {
+            id: `edge-${edgeCounter++}`,
+            source: pendingEdge.source.id,
+            target: pendingEdge.target.id,
+            name: createEdgeName,
+            properties: {
+                createdAt: now,
+                editedAt: now
+            }
+        }
+    ];
+    closeCreateEdgeDialog();
+    render();
 }
 
 function openCreateEdgeAndNodeDialog(sourceNode: Node, start: {x: number, y: number}, end: {x: number, y: number}) {
@@ -852,6 +864,7 @@ function confirmCreateEdgeAndNode() {
         const y = pendingEdgeEnd.y;
         const label = newNodeName.trim();
         const radius = calculateNodeRadius(label);
+        const now = new Date().toISOString();
         const newNode: Node = {
             id: `node-${++nodeCounter}`,
             x,
@@ -859,7 +872,10 @@ function confirmCreateEdgeAndNode() {
             radius,
             label,
             color: '#4285f4',
-            properties: {} // Always initialize properties
+            properties: {
+                createdAt: now,
+                editedAt: now
+            }
         };
         nodes = [...nodes, newNode];
         // Create edge from source to new node
@@ -868,7 +884,10 @@ function confirmCreateEdgeAndNode() {
             source: pendingEdgeSourceNode.id,
             target: newNode.id,
             name: newEdgeName.trim(),
-            properties: {} // Always initialize properties
+            properties: {
+                createdAt: now,
+                editedAt: now
+            }
         };
         edges = [...edges, newEdge];
         restartSimulation();
@@ -1154,10 +1173,10 @@ function findNodeFromElement(element: Element | null): Node | null {
 }
 
 function createEdge(source: Node, target: Node) {
-	// Open dialog instead of using prompt()
-	pendingEdge = { source, target };
-	createEdgeName = ''; // Clear previous input
-	showCreateEdgeDialog = true;
+    // Open dialog instead of using prompt()
+    pendingEdge = { source, target };
+    createEdgeName = ''; // Clear previous input
+    showCreateEdgeDialog = true;
 }
 
 function closeCreateEdgeDialog() {
@@ -1483,11 +1502,17 @@ function closeRenameDialog() {
 
 function confirmRename() {
     if (selectedItem && renameType) {
+        const now = new Date().toISOString();
         if (renameType === 'node') {
             const node = selectedItem as Node;
             node.label = renameValue;
             // Recalculate radius based on new label
             node.radius = calculateNodeRadius(renameValue);
+            // Update editedAt timestamp
+            node.properties = {
+                ...node.properties,
+                editedAt: now
+            };
             nodes = [...nodes];
             
             // Update collision detection in simulation if in force mode
@@ -1499,7 +1524,13 @@ function confirmRename() {
             // Force re-render
             render();
         } else if (renameType === 'edge') {
-            (selectedItem as Edge).name = renameValue;
+            const edge = selectedItem as Edge;
+            edge.name = renameValue;
+            // Update editedAt timestamp
+            edge.properties = {
+                ...edge.properties,
+                editedAt: now
+            };
             edges = [...edges];
             // Force re-render for edge changes
             render();
@@ -1532,12 +1563,17 @@ function closeEditDialog() {
 }
 function confirmEdit() {
     if (editItem && editType) {
+        const now = new Date().toISOString();
         if (editType === 'node') {
             const node = editItem as Node;
             node.label = editLabel;
             node.radius = calculateNodeRadius(editLabel);
             // Convert array back to object, filter out empty keys
-            node.properties = Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value]));
+            node.properties = {
+                ...Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value])),
+                createdAt: node.properties?.createdAt || now, // Preserve original createdAt if present
+                editedAt: now
+            };
             nodes = [...nodes];
             if (mode === 'force' && simulation) {
                 simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
@@ -1547,7 +1583,11 @@ function confirmEdit() {
         } else if (editType === 'edge') {
             const edge = editItem as Edge;
             edge.name = editLabel;
-            edge.properties = Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value]));
+            edge.properties = {
+                ...Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value])),
+                createdAt: edge.properties?.createdAt || now, // Preserve original createdAt if present
+                editedAt: now
+            };
             edges = [...edges];
             render();
         }
