@@ -121,7 +121,7 @@ let createEdgeName = '';
 let showCreateEdgeAndNodeDialog = false;
 let pendingEdgeSourceNode: Node | null = null;
 let pendingEdgeStart: { x: number; y: number } | null = null;
-let pendingEdgeEnd: { x: number; y: number } | null = null;
+let pendingEdgeEnd: { x: number; y: number; targetId?: string } | null = null;
 let newEdgeName = '';
 let newNodeName = '';
 
@@ -407,12 +407,17 @@ function spawnTestGraph() {
 			id: `edge-${i}`,
 			source: centerNode.id,
 			target: node.id,
-			name: `Edge ${i}`
+			name: `Edge ${i}`,
+			properties: {}
 		});
 	}
 	nodeCounter = nNodes;
 	edgeCounter = nNodes;
 }
+
+let isRightClickDraggingFromCanvas = false;
+let rightClickDragStartPos: { x: number; y: number } | null = null;
+let rightClickTempLine: d3.Selection<SVGLineElement, unknown, null, undefined> | null = null;
 
 function initializeCanvas() {
 	svg = d3.select(canvasContainer)
@@ -475,10 +480,81 @@ function initializeCanvas() {
 	svg.on('mouseup.selection', handleCanvasMouseUp);       // Namespaced mouseup for selection
 	svg.on('contextmenu', handleCanvasClick); // For right-click actions (e.g., new node)
 
+	svg.on('mousedown.rightdrag', handleCanvasRightMouseDown);
+    svg.on('mousemove.rightdrag', handleCanvasRightMouseMove);
+    svg.on('mouseup.rightdrag', handleCanvasRightMouseUp);
+
 	// Add color palette
 	createColorPalette();
 	
 	render();
+}
+
+// --- New: Handle right-click drag from canvas to node ---
+function handleCanvasRightMouseDown(event: MouseEvent) {
+    // Only start if right-click (button 2) and on SVG background
+    if (event.button === 2 && event.target === svg.node()) {
+        event.preventDefault();
+        event.stopPropagation();
+        isRightClickDraggingFromCanvas = true;
+        const [x, y] = d3.pointer(event, g.node());
+        rightClickDragStartPos = { x, y };
+        // Draw a temporary line following the mouse
+        rightClickTempLine = g.append('line')
+            .attr('class', 'temp-edge')
+            .attr('stroke', '#666')
+            .attr('stroke-width', 2)
+            .attr('marker-end', 'url(#arrowhead)')
+            .attr('x1', x)
+            .attr('y1', y)
+            .attr('x2', x)
+            .attr('y2', y);
+    }
+}
+
+function handleCanvasRightMouseMove(event: MouseEvent) {
+    if (isRightClickDraggingFromCanvas && rightClickDragStartPos && rightClickTempLine) {
+        const [x, y] = d3.pointer(event, g.node());
+        rightClickTempLine
+            .attr('x2', x)
+            .attr('y2', y);
+    }
+}
+
+function handleCanvasRightMouseUp(event: MouseEvent) {
+    if (isRightClickDraggingFromCanvas && rightClickDragStartPos) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        // Find if mouseup is on a node
+        const mouseUpElement = document.elementFromPoint(event.clientX, event.clientY);
+        const targetNode = findNodeFromElement(mouseUpElement);
+
+        if (targetNode) {
+                /* targetNode is the edge's target */
+                /* dragStartPos is where the new node will be created */
+                /* The dialog will use these to create the node at drag start and edge from new node to targetNode */
+                /* Arguments: (targetNode, start, end) */
+                // We swap the order so the new node is the source, targetNode is the target
+                /* openCreateEdgeAndNodeDialog(sourceNode, start, end) */
+                // Correction: The sourceNode param is the new node, so we pass null for now and handle in dialog logic
+                // But in your implementation, the dialog expects the targetNode as the target, and start as the new node's position.
+                // So this is correct:
+                openCreateEdgeAndNodeDialog(
+                    /* sourceNode: the new node will be created, so pass null or a placeholder */
+                    null,
+                    { x: rightClickDragStartPos.x, y: rightClickDragStartPos.y },
+                    { x: targetNode.x, y: targetNode.y, targetId: targetNode.id }
+                );
+        }
+        // Clean up temp line
+        if (rightClickTempLine) {
+            rightClickTempLine.remove();
+            rightClickTempLine = null;
+        }
+        isRightClickDraggingFromCanvas = false;
+        rightClickDragStartPos = null;
+    }
 }
 
 function handleCanvasMouseDown(event: MouseEvent) {
@@ -711,6 +787,10 @@ function handleZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>) {
 function handleCanvasClick(event: MouseEvent) {
 	// This function now primarily handles contextmenu events on the canvas
 	if (event.type === 'contextmenu') {
+		// Prevent node dialog if right-drag just happened
+        if (isRightClickDraggingFromCanvas) {
+            return;
+        }
 		// Only show create node dialog if right-click is directly on SVG background or canvas container
 		if (event.target !== svg.node() && event.target !== canvasContainer) {
 			// Check if the target is part of a node or edge
@@ -839,7 +919,11 @@ function createEdgeFromDialog() {
     render();
 }
 
-function openCreateEdgeAndNodeDialog(sourceNode: Node, start: {x: number, y: number}, end: {x: number, y: number}) {
+function openCreateEdgeAndNodeDialog(
+    sourceNode: Node | null,
+    start: { x: number; y: number },
+    end: { x: number; y: number; targetId?: string }
+) {
     showCreateEdgeAndNodeDialog = true;
     pendingEdgeSourceNode = sourceNode;
     pendingEdgeStart = start;
@@ -858,7 +942,58 @@ function closeCreateEdgeAndNodeDialog() {
 }
 
 function confirmCreateEdgeAndNode() {
-    if (pendingEdgeSourceNode && pendingEdgeEnd && newEdgeName.trim() && newNodeName.trim()) {
+    // If the dialog was opened from right-drag, pendingEdgeSourceNode is null,
+    // and pendingEdgeEnd.targetId is the id of the node to connect to.
+    if (
+        pendingEdgeStart &&
+        pendingEdgeEnd &&
+        newEdgeName.trim() &&
+        newNodeName.trim() &&
+        pendingEdgeEnd.targetId
+    ) {
+        // Create the new node at drag start position
+        const x = pendingEdgeStart.x;
+        const y = pendingEdgeStart.y;
+        const label = newNodeName.trim();
+        const radius = calculateNodeRadius(label);
+        const now = new Date().toISOString();
+        const newNode: Node = {
+            id: `node-${++nodeCounter}`,
+            x,
+            y,
+            radius,
+            label,
+            color: '#4285f4',
+            properties: {
+                createdAt: now,
+                editedAt: now
+            }
+        };
+        nodes = [...nodes, newNode];
+        // Create edge from new node to the target node
+        const newEdge: Edge = {
+            id: `edge-${++edgeCounter}`,
+            source: newNode.id,
+            target: pendingEdgeEnd.targetId,
+            name: newEdgeName.trim(),
+            properties: {
+                createdAt: now,
+                editedAt: now
+            }
+        };
+        edges = [...edges, newEdge];
+        restartSimulation();
+        render();
+        closeCreateEdgeAndNodeDialog();
+        return;
+    }
+    // Fallback: original logic for node-to-canvas drag (not used in this feature)
+    if (
+        pendingEdgeSourceNode &&
+        pendingEdgeEnd &&
+        newEdgeName.trim() &&
+        newNodeName.trim()
+    ) {
         // Place new node at drag end position
         const x = pendingEdgeEnd.x;
         const y = pendingEdgeEnd.y;
