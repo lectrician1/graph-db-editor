@@ -11,12 +11,16 @@ interface Node extends d3.SimulationNodeDatum {
 	radius: number;
 	label: string;
 	color: string;
+	// Added for arbitrary text properties (e.g., URL, description, etc.)
+	properties: Record<string, string>;
 }
 interface Edge extends d3.SimulationLinkDatum<Node> {
 	id: string;
 	source: string | Node;
 	target: string | Node;
 	name: string;
+	// Added for arbitrary text properties (e.g., URL, description, etc.)
+	properties: Record<string, string>;
 }
 
 let canvasContainer: HTMLDivElement;
@@ -763,7 +767,8 @@ function addNode(x: number, y: number, label?: string) {
 		y,
 		radius: radius,
 		label: nodeLabel,
-		color: '#4285f4'
+		color: '#4285f4',
+		properties: {} // Always initialize properties
 	};
 	nodes = [...nodes, newNode];
 	restartSimulation();
@@ -776,6 +781,7 @@ function createNodeFromDialog() {
 	}
 	// If no name provided, just close dialog without creating node
 	closeCreateNodeDialog();
+	render();
 }
 
 function closeCreateNodeDialog() {
@@ -790,7 +796,8 @@ function confirmCreateEdge() {
 			id: `edge-${++edgeCounter}`,
 			source: pendingEdge.source.id,
 			target: pendingEdge.target.id,
-			name: createEdgeName.trim()
+			name: createEdgeName.trim(),
+			properties: {} // Always initialize properties
 		};
 		edges = [...edges, newEdge];
 		if (mode === 'force') restartSimulation();
@@ -800,6 +807,22 @@ function confirmCreateEdge() {
 
 function createEdgeFromDialog() {
 	confirmCreateEdge();
+	if (!createEdgeName.trim() || !pendingEdge) {
+		closeCreateEdgeDialog();
+		return;
+	}
+	edges = [
+		...edges,
+		{
+			id: `edge-${edgeCounter++}`,
+			source: pendingEdge.source.id,
+			target: pendingEdge.target.id,
+			name: createEdgeName,
+			properties: {} // Always initialize properties
+		}
+	];
+	closeCreateEdgeDialog();
+	render();
 }
 
 function openCreateEdgeAndNodeDialog(sourceNode: Node, start: {x: number, y: number}, end: {x: number, y: number}) {
@@ -833,7 +856,8 @@ function confirmCreateEdgeAndNode() {
             y,
             radius,
             label,
-            color: '#4285f4'
+            color: '#4285f4',
+            properties: {} // Always initialize properties
         };
         nodes = [...nodes, newNode];
         // Create edge from source to new node
@@ -841,7 +865,8 @@ function confirmCreateEdgeAndNode() {
             id: `edge-${++edgeCounter}`,
             source: pendingEdgeSourceNode.id,
             target: newNode.id,
-            name: newEdgeName.trim()
+            name: newEdgeName.trim(),
+            properties: {} // Always initialize properties
         };
         edges = [...edges, newEdge];
         restartSimulation();
@@ -1191,11 +1216,11 @@ function render() {
 			e.preventDefault(); e.stopPropagation(); deleteNode(d);
 		}
 	});
-	// Double click: open rename dialog
+	// Double click: open edit dialog
 	nodeMerge.on('dblclick', (e, d) => {
-		if (e.button === 0) {
-			e.preventDefault(); e.stopPropagation(); openRenameDialog(d, 'node');
-		}
+		e.preventDefault();
+		e.stopPropagation();
+		openEditDialog(d, 'node');
 	});// Highlight selected nodes and update attributes
 	nodeMerge.select('circle')
 		.attr('r', d => d.radius)  // Update radius for renamed nodes
@@ -1246,10 +1271,12 @@ function render() {
 			e.preventDefault(); e.stopPropagation(); selectEdge(d, e);
 		}
 	});
-	// Double click: open rename dialog
+	// Double click: open edit dialog
 	edgeMerge.on('dblclick', (e, d) => {
 		if (e.button === 0) {
-			e.preventDefault(); e.stopPropagation(); openRenameDialog(d, 'edge');
+			e.preventDefault();
+			e.stopPropagation();
+			openEditDialog(d, 'edge');
 		}
 	});
 	// Highlight selected edges
@@ -1470,6 +1497,62 @@ function confirmRename() {
     }
     closeRenameDialog();
 }
+
+// --- Dialog state for editing node/edge properties ---
+let showEditDialog = false;
+let editType: 'node' | 'edge' | null = null;
+let editItem: Node | Edge | null = null;
+let editLabel = '';
+let editProperties: { key: string; value: string }[] = [];
+
+function openEditDialog(item: Node | Edge, type: 'node' | 'edge') {
+    editType = type;
+    editItem = item;
+    editLabel = type === 'node' ? (item as Node).label : (item as Edge).name;
+    // Convert properties object to array for editing
+    editProperties = Object.entries(item.properties || {}).map(([key, value]) => ({ key, value }));
+    showEditDialog = true;
+}
+function closeEditDialog() {
+    showEditDialog = false;
+    editType = null;
+    editItem = null;
+    editLabel = '';
+    editProperties = [];
+}
+function confirmEdit() {
+    if (editItem && editType) {
+        if (editType === 'node') {
+            const node = editItem as Node;
+            node.label = editLabel;
+            node.radius = calculateNodeRadius(editLabel);
+            // Convert array back to object, filter out empty keys
+            node.properties = Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value]));
+            nodes = [...nodes];
+            if (mode === 'force' && simulation) {
+                simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
+                restartSimulation();
+            }
+            render();
+        } else if (editType === 'edge') {
+            const edge = editItem as Edge;
+            edge.name = editLabel;
+            edge.properties = Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value]));
+            edges = [...edges];
+            render();
+        }
+    }
+    closeEditDialog();
+}
+function addPropertyField() {
+    editProperties = [...editProperties, { key: '', value: '' }];
+}
+function removePropertyField(idx: number) {
+    editProperties = editProperties.filter((_, i) => i !== idx);
+}
+
+// --- UI: Edit Dialog for Node/Edge ---
+
 </script>
 
 <svelte:head>
@@ -1563,15 +1646,34 @@ function confirmRename() {
 			</div>
 		</div>
 	{/if}
+	{#if showEditDialog}
+    <div class="modal-backdrop" on:contextmenu|preventDefault>
+        <div class="modal-dialog" on:contextmenu|preventDefault>
+            <h2>Edit {editType === 'node' ? 'Node' : 'Edge'}</h2>
+            <input type="text" bind:value={editLabel} autofocus placeholder={editType === 'node' ? 'Node label' : 'Edge name'} on:keydown={(e) => { if (e.key === 'Enter') confirmEdit(); if (e.key === 'Escape') closeEditDialog(); }} />
+            <div style="margin-top:1em;">
+                <h3 style="margin-bottom:0.5em;">Properties</h3>
+                {#each editProperties as prop, idx}
+                    <div style="display:flex;gap:0.5em;margin-bottom:0.3em;align-items:center;">
+                        <input type="text" bind:value={prop.key} placeholder="Property name" style="width:7em;" />
+                        <input type="text" bind:value={prop.value} placeholder="Property value" style="width:12em;" />
+                        <button on:click={() => removePropertyField(idx)} title="Remove property" style="color:#b00;">✕</button>
+                    </div>
+                {/each}
+                <button on:click={addPropertyField} style="margin-top:0.3em;">Add Property</button>
+            </div>
+            <div class="modal-actions">
+                <button on:click={confirmEdit}>OK</button>
+                <button on:click={closeEditDialog}>Cancel</button>
+            </div>
+        </div>
+    </div>
+{/if}
 </section>
 
 <style>
 /* ...existing styles from your editors... */
 section {
-	display: flex;
-	flex-direction: column;
-	justify-content: center;
-	align-items: center;
 	padding: 2rem;
 	min-height: 100vh;
 }
