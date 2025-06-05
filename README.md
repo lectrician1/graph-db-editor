@@ -1,5 +1,7 @@
 # graph-editor
 
+![image](https://github.com/user-attachments/assets/72221b31-8a71-40c5-a6d9-4999a02b8525)
+
 This is a WYSIWYG node property graph editor. I intend for it to be able to be connected to any graph database you like and for you to be able to edit it using the interface.
 
 Right now you can edit a graph that is stored locally in your browser and download it and import it.
