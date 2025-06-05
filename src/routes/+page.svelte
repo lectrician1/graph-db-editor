@@ -108,6 +108,14 @@ let showCreateNodeDialog = false;
 let pendingNodePosition: { x: number; y: number } | null = null;
 let createNodeName = '';
 
+// --- Dialog state for creating edge+node ---
+let showCreateEdgeAndNodeDialog = false;
+let pendingEdgeSourceNode: Node | null = null;
+let pendingEdgeStart: { x: number; y: number } | null = null;
+let pendingEdgeEnd: { x: number; y: number } | null = null;
+let newEdgeName = '';
+let newNodeName = '';
+
 // --- Selection state ---
 let selectedNodeIds = new Set<string>();
 let selectedEdgeIds = new Set<string>();
@@ -771,6 +779,54 @@ function closeCreateNodeDialog() {
 	createNodeName = '';
 }
 
+function openCreateEdgeAndNodeDialog(sourceNode: Node, start: {x: number, y: number}, end: {x: number, y: number}) {
+    showCreateEdgeAndNodeDialog = true;
+    pendingEdgeSourceNode = sourceNode;
+    pendingEdgeStart = start;
+    pendingEdgeEnd = end;
+    newEdgeName = '';
+    newNodeName = '';
+}
+
+function closeCreateEdgeAndNodeDialog() {
+    showCreateEdgeAndNodeDialog = false;
+    pendingEdgeSourceNode = null;
+    pendingEdgeStart = null;
+    pendingEdgeEnd = null;
+    newEdgeName = '';
+    newNodeName = '';
+}
+
+function confirmCreateEdgeAndNode() {
+    if (pendingEdgeSourceNode && pendingEdgeEnd && newEdgeName.trim() && newNodeName.trim()) {
+        // Place new node at drag end position
+        const x = pendingEdgeEnd.x;
+        const y = pendingEdgeEnd.y;
+        const label = newNodeName.trim();
+        const radius = calculateNodeRadius(label);
+        const newNode: Node = {
+            id: `node-${++nodeCounter}`,
+            x,
+            y,
+            radius,
+            label,
+            color: '#4285f4'
+        };
+        nodes = [...nodes, newNode];
+        // Create edge from source to new node
+        const newEdge: Edge = {
+            id: `edge-${++edgeCounter}`,
+            source: pendingEdgeSourceNode.id,
+            target: newNode.id,
+            name: newEdgeName.trim()
+        };
+        edges = [...edges, newEdge];
+        restartSimulation();
+        render();
+    }
+    closeCreateEdgeAndNodeDialog();
+}
+
 function applyRepulsionForce(draggedNode: Node, depth: number = 0, forceMultiplier: number = 1) {
 	if (depth >= maxRecursionDepth) return;
 	const connectedNodeIds = new Set<string>();
@@ -948,19 +1004,21 @@ function handleDragEnd(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) 
 	d3.select(event.currentTarget).select('circle')
 		.attr('stroke-width', 2)
 		.attr('stroke', '#fff');
-	
+
 	if (isDraggingForEdge) {
 		// Prevent context menu after edge creation by setting flag
 		justCompletedEdgeCreation = true;
-		
-		// Prevent the context menu event that will fire after this drag
 		event.sourceEvent.preventDefault();
 		event.sourceEvent.stopPropagation();
-		
+
 		const targetElement = document.elementFromPoint(event.sourceEvent.clientX, event.sourceEvent.clientY);
 		const targetNode = findNodeFromElement(targetElement);
 		if (targetNode && targetNode.id !== dragSourceNode?.id) {
 			createEdge(dragSourceNode!, targetNode);
+		} else {
+			// Not dropped on a node: open dialog to create new edge+node
+			const [x, y] = d3.pointer(event.sourceEvent, g.node());
+			openCreateEdgeAndNodeDialog(dragSourceNode!, {x: dragSourceNode!.x, y: dragSourceNode!.y}, {x, y});
 		}
 		if (tempEdgeLine) {
 			tempEdgeLine.remove();
@@ -968,8 +1026,6 @@ function handleDragEnd(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) 
 		}
 		isDraggingForEdge = false;
 		dragSourceNode = null;
-		
-		// Clear the flag after a short delay to allow any pending context menu events to be blocked
 		setTimeout(() => {
 			justCompletedEdgeCreation = false;
 		}, 100);
@@ -1452,6 +1508,24 @@ function confirmRename() {
 				<div class="modal-actions">
 					<button on:click={createNodeFromDialog}>OK</button>
 					<button on:click={closeCreateNodeDialog}>Cancel</button>
+				</div>
+			</div>
+		</div>
+	{/if}{#if showCreateEdgeAndNodeDialog}
+		<div class="modal-backdrop" on:contextmenu|preventDefault>
+			<div class="modal-dialog" on:contextmenu|preventDefault>
+				<h2>Create New Node and Edge</h2>
+				<label style="display:block;margin-bottom:0.5em;">
+					Edge Name:
+					<input type="text" bind:value={newEdgeName} placeholder="Enter edge name" autofocus on:keydown={(e) => { if (e.key === 'Enter') confirmCreateEdgeAndNode(); if (e.key === 'Escape') closeCreateEdgeAndNodeDialog(); }} />
+				</label>
+				<label style="display:block;margin-bottom:0.5em;">
+					Node Name:
+					<input type="text" bind:value={newNodeName} placeholder="Enter node name" on:keydown={(e) => { if (e.key === 'Enter') confirmCreateEdgeAndNode(); if (e.key === 'Escape') closeCreateEdgeAndNodeDialog(); }} />
+				</label>
+				<div class="modal-actions">
+					<button on:click={confirmCreateEdgeAndNode} disabled={!newEdgeName.trim() || !newNodeName.trim()}>OK</button>
+					<button on:click={closeCreateEdgeAndNodeDialog}>Cancel</button>
 				</div>
 			</div>
 		</div>
