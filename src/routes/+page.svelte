@@ -1299,6 +1299,11 @@ function getSelectedNodeColor(): string | null {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
+	// If focus is in an input or textarea, do not interfere
+	const tag = (event.target as HTMLElement)?.tagName;
+	if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target as HTMLElement)?.isContentEditable) {
+		return;
+	}
 	// Delete selected nodes and edges
 	if (event.key === 'Delete' || event.key === 'Backspace') {
 		event.preventDefault();
