@@ -1324,6 +1324,8 @@ function render() {
 // --- Selection Functions ---
 
 function selectNode(node: Node, event: MouseEvent) {
+	// Handles node selection logic.
+	// Previously, the selection highlight would not always update because Svelte does not track Set mutations.
 	if (event.shiftKey) {
 		// Multi-select: toggle node in selection
 		if (selectedNodeIds.has(node.id)) {
@@ -1337,15 +1339,19 @@ function selectNode(node: Node, event: MouseEvent) {
 		selectedEdgeIds.clear();
 		selectedNodeIds.add(node.id);
 	}
-	// Update the selection state
+	// To trigger Svelte reactivity, always assign new Sets after mutation.
 	selectedNodeIds = new Set(selectedNodeIds);
 	selectedEdgeIds = new Set(selectedEdgeIds);
-	
+
 	// Update color palette selection indicator
 	updateColorPaletteSelection();
+	render(); // Ensure UI updates immediately
 }
 
 function selectEdge(edge: Edge, event: MouseEvent) {
+	// Handles edge selection logic.
+	// Previously, the yellow highlight for selected edges would only flash briefly because
+	// Svelte does not detect changes to the contents of a Set unless the reference changes.
 	if (event.shiftKey) {
 		// Multi-select: toggle edge in selection
 		if (selectedEdgeIds.has(edge.id)) {
@@ -1359,20 +1365,22 @@ function selectEdge(edge: Edge, event: MouseEvent) {
 		selectedEdgeIds.clear();
 		selectedEdgeIds.add(edge.id);
 	}
-	// Update the selection state
+	// Always assign new Sets to trigger Svelte reactivity.
 	selectedNodeIds = new Set(selectedNodeIds);
 	selectedEdgeIds = new Set(selectedEdgeIds);
-	
+
 	// Update color palette selection indicator
 	updateColorPaletteSelection();
+	render(); // Ensure UI updates immediately
 }
 
 function clearSelection() {
+	// Clears all selections and triggers re-render.
 	selectedNodeIds.clear();
 	selectedEdgeIds.clear();
 	selectedNodeIds = new Set();
 	selectedEdgeIds = new Set();
-	
+
 	// Update color palette selection indicator
 	updateColorPaletteSelection();
 	render();
