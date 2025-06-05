@@ -417,10 +417,13 @@ function spawnTestGraph() {
 function initializeCanvas() {
 	svg = d3.select(canvasContainer)
 		.append('svg')
-		.attr('width', canvasWidth)
-		.attr('height', canvasHeight)
+		// Set SVG to fill its container
+		.attr('width', '100%')
+		.attr('height', '100%')
+		.attr('viewBox', `0 0 ${canvasWidth} ${canvasHeight}`) // Maintain aspect ratio and scaling
 		.style('border', '2px solid #333')
-		.style('background-color', '#fafafa');	g = svg.append('g');
+		.style('background-color', '#fafafa');
+	g = svg.append('g');
 	
 	// Add selection path element
 	selection = svg.append("path")
@@ -455,7 +458,6 @@ function initializeCanvas() {
 		.scaleExtent([0.1, 5])
 		.filter((event) => {
 			// Only allow zooming/panning with middle mouse button (button === 1) or wheel events
-			// Don't preventDefault here - let D3 handle it
 			return event.button === 1 || event.type === 'wheel';
 		})
 		.on('start', (event) => {
@@ -1660,7 +1662,7 @@ function removePropertyField(idx: number) {
                         <button on:click={() => removePropertyField(idx)} title="Remove property" style="color:#b00;">✕</button>
                     </div>
                 {/each}
-                <button on:click={addPropertyField} style="margin-top:0.3em;">Add Property</button>
+                <button class="action_button" on:click={addPropertyField}>Add Property</button>
             </div>
             <div class="modal-actions">
                 <button on:click={confirmEdit}>OK</button>
@@ -1697,13 +1699,20 @@ p {
 	background: #f5f5f5;
 	border-radius: 8px;
 	box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+	/* Make the container expand to fill available space */
+	width: 100%;
+	height: 70vh; /* or 100vh or any preferred value */
+	min-height: 400px;
+	min-width: 400px;
 }
 :global(.canvas-container svg) {
+	width: 100% !important;
+	height: 100% !important;
+	display: block;
 	-webkit-user-select: none;
 	-moz-user-select: none;
 	-ms-user-select: none;
 	user-select: none;
-	/* Prevent middle mouse button from triggering page scroll */
 	-ms-scroll-chaining: none;
 	overscroll-behavior: none;
 }
@@ -1784,6 +1793,19 @@ p {
 	gap: 1rem;
 	justify-content: flex-end;
 }
+
+.action_button {
+	padding: 0.5rem 1.2rem;
+	font-size: 1rem;
+	border: none;
+	border-radius: 4px;
+	background: #4285f4;
+	color: #fff;
+	cursor: pointer;
+	transition: background 0.2s;
+	margin: 0.5rem 0;
+}
+
 .modal-actions button {
 	padding: 0.5rem 1.2rem;
 	font-size: 1rem;
