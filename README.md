@@ -1,18 +1,12 @@
-# sv
+# graph-editor
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+This is a WYSIWYG node property graph editor. I intend for it to be able to be connected to any graph database you like and for you to be able to edit it using the interface.
 
-## Creating a project
+Right now you can edit a graph that is stored locally in your browser and download it and import it.
 
-If you're seeing this, you've probably already done this step. Congrats!
+The interface to create the graph is extreamly convenient and it is very quick to create nodes and realtionships. It might be some of the fastest diagraming software out there.
 
-```bash
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
-```
+It is built with Svelte and D3.JS
 
 ## Developing
 

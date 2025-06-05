@@ -521,6 +521,8 @@ function handleCanvasRightMouseMove(event: MouseEvent) {
     }
 }
 
+let lastEdgeName = '';
+
 function handleCanvasRightMouseUp(event: MouseEvent) {
     if (isRightClickDraggingFromCanvas && rightClickDragStartPos) {
         event.preventDefault();
@@ -878,6 +880,9 @@ function closeCreateNodeDialog() {
 
 function confirmCreateEdge() {
     if (pendingEdge && createEdgeName.trim()) {
+        // Store the last entered edge name for future dialogs
+        lastEdgeName = createEdgeName.trim();
+
         const now = new Date().toISOString();
         const newEdge: Edge = {
             id: `edge-${++edgeCounter}`,
@@ -928,7 +933,8 @@ function openCreateEdgeAndNodeDialog(
     pendingEdgeSourceNode = sourceNode;
     pendingEdgeStart = start;
     pendingEdgeEnd = end;
-    newEdgeName = '';
+    // Pre-fill edge name with last entered value (if any)
+    newEdgeName = lastEdgeName;
     newNodeName = '';
 }
 
@@ -951,6 +957,9 @@ function confirmCreateEdgeAndNode() {
         newNodeName.trim() &&
         pendingEdgeEnd.targetId
     ) {
+        // Store the last entered edge name for future dialogs
+        lastEdgeName = newEdgeName.trim();
+
         // Create the new node at drag start position
         const x = pendingEdgeStart.x;
         const y = pendingEdgeStart.y;
@@ -994,6 +1003,9 @@ function confirmCreateEdgeAndNode() {
         newEdgeName.trim() &&
         newNodeName.trim()
     ) {
+        // Store the last entered edge name for future dialogs
+        lastEdgeName = newEdgeName.trim();
+
         // Place new node at drag end position
         const x = pendingEdgeEnd.x;
         const y = pendingEdgeEnd.y;
@@ -1308,9 +1320,10 @@ function findNodeFromElement(element: Element | null): Node | null {
 }
 
 function createEdge(source: Node, target: Node) {
-    // Open dialog instead of using prompt()
+    // Open dialog for creating an edge between two nodes.
     pendingEdge = { source, target };
-    createEdgeName = ''; // Clear previous input
+    // Pre-fill edge name with last entered value (if any)
+    createEdgeName = lastEdgeName;
     showCreateEdgeDialog = true;
 }
 
@@ -1805,24 +1818,44 @@ function removePropertyField(idx: number) {
 		<div class="modal-backdrop" on:contextmenu|preventDefault>
 			<div class="modal-dialog" on:contextmenu|preventDefault>
 				<h2>Create New Edge</h2>
-				<input type="text" bind:value={createEdgeName} placeholder="Enter edge name" autofocus on:keydown={(e) => { if (e.key === 'Enter') createEdgeFromDialog(); if (e.key === 'Escape') closeCreateEdgeDialog(); }} />
+				<input
+					type="text"
+					bind:value={createEdgeName}
+					placeholder="Enter edge name"
+					autofocus
+					on:focus={e => e.target.select()}
+					on:keydown={(e) => { if (e.key === 'Enter') createEdgeFromDialog(); if (e.key === 'Escape') closeCreateEdgeDialog(); }}
+				/>
 				<div class="modal-actions">
 					<button on:click={createEdgeFromDialog}>OK</button>
 					<button on:click={closeCreateEdgeDialog}>Cancel</button>
 				</div>
 			</div>
 		</div>
-	{/if}{#if showCreateEdgeAndNodeDialog}
+	{/if}
+	{#if showCreateEdgeAndNodeDialog}
 		<div class="modal-backdrop" on:contextmenu|preventDefault>
 			<div class="modal-dialog" on:contextmenu|preventDefault>
 				<h2>Create New Node and Edge</h2>
 				<label style="display:block;margin-bottom:0.5em;">
 					Edge Name:
-					<input type="text" bind:value={newEdgeName} placeholder="Enter edge name" autofocus on:keydown={(e) => { if (e.key === 'Enter') confirmCreateEdgeAndNode(); if (e.key === 'Escape') closeCreateEdgeAndNodeDialog(); }} />
+					<input
+						type="text"
+						bind:value={newEdgeName}
+						placeholder="Enter edge name"
+						autofocus
+						on:focus={e => e.target.select()}
+						on:keydown={(e) => { if (e.key === 'Enter') confirmCreateEdgeAndNode(); if (e.key === 'Escape') closeCreateEdgeAndNodeDialog(); }}
+					/>
 				</label>
 				<label style="display:block;margin-bottom:0.5em;">
 					Node Name:
-					<input type="text" bind:value={newNodeName} placeholder="Enter node name" on:keydown={(e) => { if (e.key === 'Enter') confirmCreateEdgeAndNode(); if (e.key === 'Escape') closeCreateEdgeAndNodeDialog(); }} />
+					<input
+						type="text"
+						bind:value={newNodeName}
+						placeholder="Enter node name"
+						on:keydown={(e) => { if (e.key === 'Enter') confirmCreateEdgeAndNode(); if (e.key === 'Escape') closeCreateEdgeAndNodeDialog(); }}
+					/>
 				</label>
 				<div class="modal-actions">
 					<button on:click={confirmCreateEdgeAndNode} disabled={!newEdgeName.trim() || !newNodeName.trim()}>OK</button>
