@@ -68,6 +68,113 @@ let dragOffsets: Map<string, { dx: number; dy: number }> = new Map();
 const repelDistance = 80;
 const repelStrength = 0.3;
 
+// --- Popover state for showing properties ---
+let showPopover = false;
+let popoverItem: Node | Edge | null = null;
+let popoverType: 'node' | 'edge' | null = null;
+let popoverPosition = { x: 0, y: 0 };
+
+// Function to show popover for selected item
+function updatePopover() {
+    // Only show popover if exactly one item is selected
+    if (selectedNodeIds.size === 1 && selectedEdgeIds.size === 0) {
+        const nodeId = Array.from(selectedNodeIds)[0];
+        const node = nodes.find(n => n.id === nodeId);
+        if (node) {
+            popoverItem = node;
+            popoverType = 'node';
+            showPopover = true;
+            updatePopoverPosition();
+        }
+    } else if (selectedEdgeIds.size === 1 && selectedNodeIds.size === 0) {
+        const edgeId = Array.from(selectedEdgeIds)[0];
+        const edge = edges.find(e => e.id === edgeId);
+        if (edge) {
+            popoverItem = edge;
+            popoverType = 'edge';
+            showPopover = true;
+            updatePopoverPosition();
+        }
+    } else {
+        hidePopover();
+    }
+}
+
+// Function to update popover position based on selected item
+function updatePopoverPosition() {
+    if (!popoverItem || !svg || !g) return;
+
+    const svgNode = svg.node();
+    if (!svgNode) return;
+
+    const svgRect = svgNode.getBoundingClientRect();
+    const transform = d3.zoomTransform(svgNode);
+
+    if (popoverType === 'node') {
+        const node = popoverItem as Node;
+        // Convert node coordinates to screen coordinates
+        const screenX = transform.applyX(node.x) + svgRect.left;
+        const screenY = transform.applyY(node.y) + svgRect.top;
+        
+        // Position popover to the right of the node, with some offset
+        popoverPosition = {
+            x: screenX + (node.radius * transform.k) + 20,
+            y: screenY - 50 // Offset upward a bit
+        };
+    } else if (popoverType === 'edge') {
+        const edge = popoverItem as Edge;
+        const sourceNode = typeof edge.source === 'string' ? nodes.find(n => n.id === edge.source) : edge.source;
+        const targetNode = typeof edge.target === 'string' ? nodes.find(n => n.id === edge.target) : edge.target;
+        
+        if (sourceNode && targetNode) {
+            // Position at the midpoint of the edge
+            const midX = (sourceNode.x + targetNode.x) / 2;
+            const midY = (sourceNode.y + targetNode.y) / 2;
+            
+            // Convert to screen coordinates
+            const screenX = transform.applyX(midX) + svgRect.left;
+            const screenY = transform.applyY(midY) + svgRect.top;
+            
+            popoverPosition = {
+                x: screenX + 20,
+                y: screenY - 50
+            };
+        }
+    }
+
+    // Ensure popover stays within viewport bounds
+    const popoverWidth = 280; // Approximate popover width
+    const popoverHeight = 200; // Approximate popover height
+    
+    if (popoverPosition.x + popoverWidth > window.innerWidth) {
+        popoverPosition.x = window.innerWidth - popoverWidth - 10;
+    }
+    if (popoverPosition.x < 10) {
+        popoverPosition.x = 10;
+    }
+    if (popoverPosition.y + popoverHeight > window.innerHeight) {
+        popoverPosition.y = window.innerHeight - popoverHeight - 10;
+    }
+    if (popoverPosition.y < 10) {
+        popoverPosition.y = 10;
+    }
+}
+
+function hidePopover() {
+    showPopover = false;
+    popoverItem = null;
+    popoverType = null;
+}
+
+// Function to format date strings for display
+function formatDate(dateString: string): string {
+    try {
+        return new Date(dateString).toLocaleString();
+    } catch {
+        return dateString;
+    }
+}
+
 // --- Node Search State ---
 // Previous attempts at search only highlighted nodes, but did not allow selection or navigation.
 // Now, we add search with selection and pan/zoom-to-node on click.
@@ -94,6 +201,8 @@ function focusAndSelectNode(nodeId: string) {
     selectedNodeIds.add(nodeId);
     selectedNodeIds = new Set(selectedNodeIds); // Svelte reactivity
     updateColorPaletteSelection();
+    // Update popover for the focused node
+    updatePopover();
     render();
 
     // Find node and pan/zoom to it
@@ -125,7 +234,13 @@ function focusAndSelectNode(nodeId: string) {
             d3.zoomIdentity
                 .translate(tx, ty)
                 .scale(targetScale)
-        );
+        )
+        .on('end', () => {
+            // Update popover position after zoom animation completes
+            if (showPopover) {
+                updatePopoverPosition();
+            }
+        });
 }
 
 // When pressing Enter in the search box, focus the first result
@@ -653,76 +768,78 @@ function handleCanvasMouseDown(event: MouseEvent) {
 }
 
 function handleCanvasMouseUp(event: MouseEvent) {
-	if (!isSelecting || event.button !== 0) {
-		// If not actively selecting or not a left mouse button up, reset if needed and exit
-		if (isSelecting) {
-			isSelecting = false;
-			selection.attr("visibility", "hidden");
-			render(); // Ensure selection box is hidden
-		}
-		return;
-	}
+    if (!isSelecting || event.button !== 0) {
+        // If not actively selecting or not a left mouse button up, reset if needed and exit
+        if (isSelecting) {
+            isSelecting = false;
+            selection.attr("visibility", "hidden");
+            render(); // Ensure selection box is hidden
+        }
+        return;
+    }
 
-	isSelecting = false;
-	selection.attr("visibility", "hidden"); // Hide the box first
+    isSelecting = false;
+    selection.attr("visibility", "hidden"); // Hide the box first
 
-	const end = d3.pointer(event, svg.node());
+    const end = d3.pointer(event, svg.node());
 
-	// Check if it was a click (minimal drag) vs a drag for selection
-	const movedDistance = Math.sqrt(
-		Math.pow(end[0] - selectionStart[0], 2) + Math.pow(end[1] - selectionStart[1], 2)
-	);
+    // Check if it was a click (minimal drag) vs a drag for selection
+    const movedDistance = Math.sqrt(
+        Math.pow(end[0] - selectionStart[0], 2) + Math.pow(end[1] - selectionStart[1], 2)
+    );
 
-	if (movedDistance < clickThreshold) {
-		// It was a click on the canvas, not a drag for selection box
-		if (!event.shiftKey) {
-			clearSelection(); // Clears selection and re-renders
-		} else {
-			render(); // Re-render if shift was held, to ensure UI is up-to-date
-		}
-	} else {
-		// It was a drag for selection box
-		const selX = Math.min(selectionStart[0], end[0]);
-		const selY = Math.min(selectionStart[1], end[1]);
-		const selWidth = Math.abs(end[0] - selectionStart[0]);
-		const selHeight = Math.abs(end[1] - selectionStart[1]);
+    if (movedDistance < clickThreshold) {
+        // It was a click on the canvas, not a drag for selection box
+        if (!event.shiftKey) {
+            clearSelection(); // Clears selection and re-renders, also hides popover
+        } else {
+            render(); // Re-render if shift was held, to ensure UI is up-to-date
+        }
+    } else {
+        // It was a drag for selection box
+        const selX = Math.min(selectionStart[0], end[0]);
+        const selY = Math.min(selectionStart[1], end[1]);
+        const selWidth = Math.abs(end[0] - selectionStart[0]);
+        const selHeight = Math.abs(end[1] - selectionStart[1]);
 
-		const newlySelectedNodeIds = new Set<string>();
-		nodes.forEach(node => {
-			// Convert node coordinates from g-space to svg-space
-			const transform = d3.zoomTransform(svg.node()!);
-			const nodeX = transform.applyX(node.x);
-			const nodeY = transform.applyY(node.y);
-			
-			if (
-				nodeX >= selX &&
-				nodeX <= selX + selWidth &&
-				nodeY >= selY &&
-				nodeY <= selY + selHeight
-			) {
-				newlySelectedNodeIds.add(node.id);
-			}
-		});
+        const newlySelectedNodeIds = new Set<string>();
+        nodes.forEach(node => {
+            // Convert node coordinates from g-space to svg-space
+            const transform = d3.zoomTransform(svg.node()!);
+            const nodeX = transform.applyX(node.x);
+            const nodeY = transform.applyY(node.y);
+            
+            if (
+                nodeX >= selX &&
+                nodeX <= selX + selWidth &&
+                nodeY >= selY &&
+                nodeY <= selY + selHeight
+            ) {
+                newlySelectedNodeIds.add(node.id);
+            }
+        });
 
-		if (!event.shiftKey) {
-			selectedNodeIds.clear();
-			selectedEdgeIds.clear(); // Edges are not selected by box, but clear for consistency
-			newlySelectedNodeIds.forEach(id => selectedNodeIds.add(id));
-		} else {
-			// Additive selection with Shift
-			newlySelectedNodeIds.forEach(id => {
-				if (selectedNodeIds.has(id)) {
-					// Optionally, Shift+Drag could toggle, but typically it adds
-					// selectedNodeIds.delete(id); // To toggle
-				} else {
-					selectedNodeIds.add(id);
-				}
-			});
-		}
-		selectedNodeIds = new Set(selectedNodeIds); // Trigger Svelte reactivity
-		updateColorPaletteSelection();
-		render();
-	}
+        if (!event.shiftKey) {
+            selectedNodeIds.clear();
+            selectedEdgeIds.clear(); // Edges are not selected by box, but clear for consistency
+            newlySelectedNodeIds.forEach(id => selectedNodeIds.add(id));
+        } else {
+            // Additive selection with Shift
+            newlySelectedNodeIds.forEach(id => {
+                if (selectedNodeIds.has(id)) {
+                    // Optionally, Shift+Drag could toggle, but typically it adds
+                    // selectedNodeIds.delete(id); // To toggle
+                } else {
+                    selectedNodeIds.add(id);
+                }
+            });
+        }
+        selectedNodeIds = new Set(selectedNodeIds); // Trigger Svelte reactivity
+        updateColorPaletteSelection();
+        // Update popover after selection change
+        updatePopover();
+        render();
+    }
 }
 
 function createColorPalette() {
@@ -850,7 +967,11 @@ function switchMode(newMode: 'force' | 'manual') {
 }
 
 function handleZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>) {
-	g.attr('transform', event.transform.toString());
+    g.attr('transform', event.transform.toString());
+    // Update popover position when zooming/panning
+    if (showPopover) {
+        updatePopoverPosition();
+    }
 }
 
 function handleCanvasClick(event: MouseEvent) {
@@ -1283,94 +1404,76 @@ function handleDrag(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
 }
 
 function handleDragEnd(event: d3.D3DragEvent<SVGGElement, Node, Node>, d: Node) {
-	isDraggingNode = false;
-	d3.select(event.currentTarget).select('circle')
-		.attr('stroke-width', 2)
-		.attr('stroke', '#fff');
+    isDraggingNode = false;
+    d3.select(event.currentTarget).select('circle')
+        .attr('stroke-width', 2)
+        .attr('stroke', '#fff');
 
-	if (isDraggingForEdge) {
-		// Prevent context menu after edge creation by setting flag
-		justCompletedEdgeCreation = true;
-		event.sourceEvent.preventDefault();
-		event.sourceEvent.stopPropagation();
+    if (isDraggingForEdge) {
+        // Prevent context menu after edge creation by setting flag
+        justCompletedEdgeCreation = true;
+        event.sourceEvent.preventDefault();
+        event.sourceEvent.stopPropagation();
 
-		const targetElement = document.elementFromPoint(event.sourceEvent.clientX, event.sourceEvent.clientY);
-		const targetNode = findNodeFromElement(targetElement);
-		if (targetNode && targetNode.id !== dragSourceNode?.id) {
-			createEdge(dragSourceNode!, targetNode);
-		} else {
-			// Not dropped on a node: open dialog to create new edge+node
-			const [x, y] = d3.pointer(event.sourceEvent, g.node());
-			openCreateEdgeAndNodeDialog(dragSourceNode!, {x: dragSourceNode!.x, y: dragSourceNode!.y}, {x, y});
-		}
-		if (tempEdgeLine) {
-			tempEdgeLine.remove();
-			tempEdgeLine = null;
-		}
-		isDraggingForEdge = false;
-		dragSourceNode = null;
-		setTimeout(() => {
-			justCompletedEdgeCreation = false;
-		}, 100);
-	} else {
-		// Check if this was actually a click (minimal movement)
-		if (dragStartPosition && draggedNode) {
-			const dx = event.x - dragStartPosition.x;
-			const dy = event.y - dragStartPosition.y;
-			const distance = Math.sqrt(dx * dx + dy * dy);
-			
-			if (distance < clickThreshold) {
-				// This was a click, not a drag - handle selection
-				if (event.sourceEvent.shiftKey) {
-					// Shift-click: toggle node in/out of selection
-					if (selectedNodeIds.has(d.id)) {
-						selectedNodeIds.delete(d.id);
-					} else {
-						selectedNodeIds.add(d.id);
-					}
-				} else {
-					// Regular click: clear existing selection and select this node
-					selectedNodeIds.clear();
-					selectedEdgeIds.clear();
-					selectedNodeIds.add(d.id);
-				}
-				
-				// Update the selection state
-				selectedNodeIds = new Set(selectedNodeIds);
-				selectedEdgeIds = new Set(selectedEdgeIds);
-				
-				// Update color palette selection indicator
-				updateColorPaletteSelection();
-			}
-		}
-				// Reset drag detection variables
-		dragStartPosition = null;
-		draggedNode = null;
-		
-		// Clear drag offsets after drag ends
-		dragOffsets.clear();
-		
-		if (mode === 'force') {
-			// Release fixed positions for all selected nodes if multi-dragging
-			if (selectedNodeIds.size > 1) {
-				nodes.forEach(node => {
-					if (selectedNodeIds.has(node.id)) {
-						node.fx = null;
-						node.fy = null;
-					}
-				});
-			} else {
-				// Single node
-				d.fx = null;
-				d.fy = null;
-			}
-			
-			if (simulation) {
-				simulation.alphaTarget(0);
-				setTimeout(() => simulation.stop(), 200);
-			}
-		}
-	}
+        const targetElement = document.elementFromPoint(event.sourceEvent.clientX, event.sourceEvent.clientY);
+        const targetNode = findNodeFromElement(targetElement);
+        if (targetNode && targetNode.id !== dragSourceNode?.id) {
+            createEdge(dragSourceNode!, targetNode);
+        } else {
+            // Not dropped on a node: open dialog to create new edge+node
+            const [x, y] = d3.pointer(event.sourceEvent, g.node());
+            openCreateEdgeAndNodeDialog(dragSourceNode!, {x: dragSourceNode!.x, y: dragSourceNode!.y}, {x, y});
+        }
+        if (tempEdgeLine) {
+            tempEdgeLine.remove();
+            tempEdgeLine = null;
+        }
+        isDraggingForEdge = false;
+        dragSourceNode = null;
+        setTimeout(() => {
+            justCompletedEdgeCreation = false;
+        }, 100);
+    } else {
+        // Check if this was actually a click (minimal movement)
+        if (dragStartPosition && draggedNode) {
+            const dx = event.x - dragStartPosition.x;
+            const dy = event.y - dragStartPosition.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < clickThreshold) {
+                // This was a click, not a drag - use the selectNode function
+                selectNode(d, event.sourceEvent);
+            }
+        }
+                
+        // Reset drag detection variables
+        dragStartPosition = null;
+        draggedNode = null;
+        
+        // Clear drag offsets after drag ends
+        dragOffsets.clear();
+        
+        if (mode === 'force') {
+            // Release fixed positions for all selected nodes if multi-dragging
+            if (selectedNodeIds.size > 1) {
+                nodes.forEach(node => {
+                    if (selectedNodeIds.has(node.id)) {
+                        node.fx = null;
+                        node.fy = null;
+                    }
+                });
+            } else {
+                // Single node
+                d.fx = null;
+                d.fy = null;
+            }
+            
+            if (simulation) {
+                simulation.alphaTarget(0);
+                setTimeout(() => simulation.stop(), 200);
+            }
+        }
+    }
 }
 
 function findNodeFromElement(element: Element | null): Node | null {
@@ -1416,61 +1519,80 @@ function deleteEdge(edgeToDelete: Edge) {
 }
 
 function render() {
-	// Render nodes
-	const nodeSelection = g.selectAll<SVGGElement, Node>('.node')
-		.data(nodes, d => d.id);
+    // Render nodes
+    const nodeSelection = g.selectAll<SVGGElement, Node>('.node')
+        .data(nodes, d => d.id);
 
-	const nodeEnter = nodeSelection.enter()
-		.append('g')
-		.attr('class', 'node')
-		.attr('transform', d => `translate(${d.x}, ${d.y})`);
-	nodeEnter.append('circle')
-		.attr('r', d => d.radius)
-		.attr('fill', d => d.color)
-		.attr('stroke', '#fff')
-		.attr('stroke-width', 2);
+    const nodeEnter = nodeSelection.enter()
+        .append('g')
+        .attr('class', 'node')
+        .attr('transform', d => `translate(${d.x}, ${d.y})`);
+    nodeEnter.append('circle')
+        .attr('r', d => d.radius)
+        .attr('fill', d => d.color)
+        .attr('stroke', '#fff')
+        .attr('stroke-width', 2);
 
-	nodeEnter.append('text')
-		.attr('text-anchor', 'middle')
-		.attr('dy', '.35em')
-		.attr('fill', 'white')
-		.attr('font-size', '12px')
-		.attr('font-weight', 'bold')
-		.text(d => d.label);
+    nodeEnter.append('text')
+        .attr('text-anchor', 'middle')
+        .attr('dy', '.35em')
+        .attr('fill', 'white')
+        .attr('font-size', '12px')
+        .attr('font-weight', 'bold')
+        .text(d => d.label);
 
-	// Merge enter and update
-	const nodeMerge = nodeEnter.merge(nodeSelection);
+    // Merge enter and update
+    const nodeMerge = nodeEnter.merge(nodeSelection);
 
-	// Drag & deletion
-	const drag = d3.drag<SVGGElement, Node>()
-		.filter(e => e.button === 0 || e.button === 2)
-		.on('start', handleDragStart)
-		.on('drag', handleDrag)
-		.on('end', handleDragEnd);
-	nodeMerge.call(drag);	nodeMerge.on('mousedown', (e, d) => {
-		if (e.button === 1) {
-			e.preventDefault(); e.stopPropagation(); deleteNode(d);
-		}
-	});
-	// Double click: open edit dialog
-	nodeMerge.on('dblclick', (e, d) => {
-		e.preventDefault();
-		e.stopPropagation();
-		openEditDialog(d, 'node');
-	});// Highlight selected nodes and update attributes
-	nodeMerge.select('circle')
-		.attr('r', d => d.radius)  // Update radius for renamed nodes
-		.attr('fill', d => d.color)
-		.attr('stroke', d => selectedNodeIds.has(d.id) ? '#ffb300' : '#fff')
-		.attr('stroke-width', d => selectedNodeIds.has(d.id) ? 4 : 2);
+    // Drag & deletion
+    const drag = d3.drag<SVGGElement, Node>()
+        .filter(e => e.button === 0 || e.button === 2)
+        .on('start', handleDragStart)
+        .on('drag', handleDrag)
+        .on('end', handleDragEnd);
+    nodeMerge.call(drag);
 
-	// Update text content for renamed nodes
-	nodeMerge.select('text')
-		.text(d => d.label);
+    // Mouse event handlers for nodes
+    nodeMerge.on('mousedown', (e, d) => {
+        if (e.button === 1) {
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            deleteNode(d);
+        }
+    });
 
-	// Update positions
-	nodeMerge.attr('transform', d => `translate(${d.x}, ${d.y})`);
-	nodeSelection.exit().remove();
+    // Click handler for direct clicks (not from drag end)
+    // This handles cases where click events might bypass the drag system
+    nodeMerge.on('click', (e, d) => {
+        // Only handle direct clicks, not clicks that come from drag end
+        if (e.button === 0 && !isDraggingNode) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectNode(d, e);
+        }
+    });
+
+    // Double click: open edit dialog
+    nodeMerge.on('dblclick', (e, d) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openEditDialog(d, 'node');
+    });
+
+    // Highlight selected nodes and update attributes
+    nodeMerge.select('circle')
+        .attr('r', d => d.radius)  // Update radius for renamed nodes
+        .attr('fill', d => d.color)
+        .attr('stroke', d => selectedNodeIds.has(d.id) ? '#ffb300' : '#fff')
+        .attr('stroke-width', d => selectedNodeIds.has(d.id) ? 4 : 2);
+
+    // Update text content for renamed nodes
+    nodeMerge.select('text')
+        .text(d => d.label);
+
+    // Update positions
+    nodeMerge.attr('transform', d => `translate(${d.x}, ${d.y})`);
+    nodeSelection.exit().remove();
 
 	// Render edges
 	const edgeSelection = g.selectAll<SVGGElement, Edge>('.edge')
@@ -1558,66 +1680,72 @@ function render() {
 // --- Selection Functions ---
 
 function selectNode(node: Node, event: MouseEvent) {
-	// Handles node selection logic.
-	// Previously, the selection highlight would not always update because Svelte does not track Set mutations.
-	if (event.shiftKey) {
-		// Multi-select: toggle node in selection
-		if (selectedNodeIds.has(node.id)) {
-			selectedNodeIds.delete(node.id);
-		} else {
-			selectedNodeIds.add(node.id);
-		}
-	} else {
-		// Single select: clear existing selection and select this node
-		selectedNodeIds.clear();
-		selectedEdgeIds.clear();
-		selectedNodeIds.add(node.id);
-	}
-	// To trigger Svelte reactivity, always assign new Sets after mutation.
-	selectedNodeIds = new Set(selectedNodeIds);
-	selectedEdgeIds = new Set(selectedEdgeIds);
+    // Handles node selection logic.
+    // Previously, the selection highlight would not always update because Svelte does not track Set mutations.
+    if (event.shiftKey) {
+        // Multi-select: toggle node in selection
+        if (selectedNodeIds.has(node.id)) {
+            selectedNodeIds.delete(node.id);
+        } else {
+            selectedNodeIds.add(node.id);
+        }
+    } else {
+        // Single select: clear existing selection and select this node
+        selectedNodeIds.clear();
+        selectedEdgeIds.clear();
+        selectedNodeIds.add(node.id);
+    }
+    // To trigger Svelte reactivity, always assign new Sets after mutation.
+    selectedNodeIds = new Set(selectedNodeIds);
+    selectedEdgeIds = new Set(selectedEdgeIds);
 
-	// Update color palette selection indicator
-	updateColorPaletteSelection();
-	render(); // Ensure UI updates immediately
+    // Update color palette selection indicator
+    updateColorPaletteSelection();
+    // Update popover display
+    updatePopover();
+    render(); // Ensure UI updates immediately
 }
 
 function selectEdge(edge: Edge, event: MouseEvent) {
-	// Handles edge selection logic.
-	// Previously, the yellow highlight for selected edges would only flash briefly because
-	// Svelte does not detect changes to the contents of a Set unless the reference changes.
-	if (event.shiftKey) {
-		// Multi-select: toggle edge in selection
-		if (selectedEdgeIds.has(edge.id)) {
-			selectedEdgeIds.delete(edge.id);
-		} else {
-			selectedEdgeIds.add(edge.id);
-		}
-	} else {
-		// Single select: clear existing selection and select this edge
-		selectedNodeIds.clear();
-		selectedEdgeIds.clear();
-		selectedEdgeIds.add(edge.id);
-	}
-	// Always assign new Sets to trigger Svelte reactivity.
-	selectedNodeIds = new Set(selectedNodeIds);
-	selectedEdgeIds = new Set(selectedEdgeIds);
+    // Handles edge selection logic.
+    // Previously, the yellow highlight for selected edges would only flash briefly because
+    // Svelte does not detect changes to the contents of a Set unless the reference changes.
+    if (event.shiftKey) {
+        // Multi-select: toggle edge in selection
+        if (selectedEdgeIds.has(edge.id)) {
+            selectedEdgeIds.delete(edge.id);
+        } else {
+            selectedEdgeIds.add(edge.id);
+        }
+    } else {
+        // Single select: clear existing selection and select this edge
+        selectedNodeIds.clear();
+        selectedEdgeIds.clear();
+        selectedEdgeIds.add(edge.id);
+    }
+    // Always assign new Sets to trigger Svelte reactivity.
+    selectedNodeIds = new Set(selectedNodeIds);
+    selectedEdgeIds = new Set(selectedEdgeIds);
 
-	// Update color palette selection indicator
-	updateColorPaletteSelection();
-	render(); // Ensure UI updates immediately
+    // Update color palette selection indicator
+    updateColorPaletteSelection();
+    // Update popover display
+    updatePopover();
+    render(); // Ensure UI updates immediately
 }
 
 function clearSelection() {
-	// Clears all selections and triggers re-render.
-	selectedNodeIds.clear();
-	selectedEdgeIds.clear();
-	selectedNodeIds = new Set();
-	selectedEdgeIds = new Set();
+    // Clears all selections and triggers re-render.
+    selectedNodeIds.clear();
+    selectedEdgeIds.clear();
+    selectedNodeIds = new Set();
+    selectedEdgeIds = new Set();
 
-	// Update color palette selection indicator
-	updateColorPaletteSelection();
-	render();
+    // Update color palette selection indicator
+    updateColorPaletteSelection();
+    // Hide popover when selection is cleared
+    hidePopover();
+    render();
 }
 
 function changeSelectedNodesColor(color: string) {
@@ -2015,6 +2143,50 @@ function removePropertyField(idx: number) {
         </div>
     </div>
 {/if}
+
+{#if showPopover && popoverItem}
+    <div 
+        class="popover" 
+        style="left: {popoverPosition.x}px; top: {popoverPosition.y}px;"
+        on:click|stopPropagation
+    >
+        <div class="popover-header">
+            <strong>
+                {#if popoverType === 'node'}
+                    Node: {(popoverItem as Node).label}
+                {:else}
+                    Edge: {(popoverItem as Edge).name}
+                {/if}
+            </strong>
+            <button 
+                class="popover-close" 
+                on:click={hidePopover}
+                aria-label="Close popover"
+            >×</button>
+        </div>
+        <div class="popover-content">
+            {#if popoverItem.properties && Object.keys(popoverItem.properties).length > 0}
+                <div class="properties-section">
+                    <h4>Properties:</h4>
+                    {#each Object.entries(popoverItem.properties) as [key, value]}
+                        <div class="property-item">
+                            <span class="property-key">{key}:</span>
+                            <span class="property-value">
+                                {#if key.toLowerCase().includes('at') || key.toLowerCase().includes('date')}
+                                    {formatDate(value)}
+                                {:else}
+                                    {value}
+                                {/if}
+                            </span>
+                        </div>
+                    {/each}
+                </div>
+            {:else}
+                <p class="no-properties">No properties</p>
+            {/if}
+        </div>
+    </div>
+{/if}
 </section>
 
 <style>
@@ -2174,4 +2346,98 @@ p {
 .file-controls button:active {
 	transform: translateY(0);
 }
+
+.popover {
+    position: fixed;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1001;
+    max-width: 280px;
+    min-width: 200px;
+    font-size: 0.9rem;
+    pointer-events: auto;
+}
+
+.popover-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #eee;
+    background: #f8f9fa;
+    border-radius: 8px 8px 0 0;
+}
+
+.popover-header strong {
+    color: #333;
+    font-size: 1rem;
+    word-break: break-word;
+}
+
+.popover-close {
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    color: #666;
+    cursor: pointer;
+    padding: 0;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.popover-close:hover {
+    background: #e9ecef;
+    color: #333;
+}
+
+.popover-content {
+    padding: 1rem;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.properties-section h4 {
+    margin: 0 0 0.5rem 0;
+    color: #555;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.property-item {
+    display: flex;
+    margin-bottom: 0.4rem;
+    gap: 0.5rem;
+    align-items: flex-start;
+}
+
+.property-key {
+    font-weight: 600;
+    color: #666;
+    flex-shrink: 0;
+    min-width: 0;
+    word-break: break-word;
+}
+
+.property-value {
+    color: #333;
+    word-break: break-word;
+    flex: 1;
+    min-width: 0;
+}
+
+.no-properties {
+    color: #999;
+    font-style: italic;
+    margin: 0;
+    text-align: center;
+    padding: 1rem 0;
+}
+
 </style>
