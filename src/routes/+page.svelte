@@ -68,6 +68,73 @@ let dragOffsets: Map<string, { dx: number; dy: number }> = new Map();
 const repelDistance = 80;
 const repelStrength = 0.3;
 
+// --- Node Search State ---
+// Previous attempts at search only highlighted nodes, but did not allow selection or navigation.
+// Now, we add search with selection and pan/zoom-to-node on click.
+let searchQuery = '';
+let searchResults: Node[] = [];
+let searchActive = false;
+
+// Update search results reactively as the query changes
+$: if (searchQuery.trim()) {
+    // Case-insensitive substring match on node label
+    searchResults = nodes.filter(n =>
+        n.label.toLowerCase().includes(searchQuery.trim().toLowerCase())
+    );
+    searchActive = true;
+} else {
+    searchResults = [];
+    searchActive = false;
+}
+
+// Focus and zoom to a node by id
+function focusAndSelectNode(nodeId: string) {
+    // Select the node
+    selectedNodeIds.clear();
+    selectedNodeIds.add(nodeId);
+    selectedNodeIds = new Set(selectedNodeIds); // Svelte reactivity
+    updateColorPaletteSelection();
+    render();
+
+    // Find node and pan/zoom to it
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node || !svg || !g) return;
+
+    // Get current zoom transform
+    const svgNode = svg.node();
+    const gNode = g.node();
+    if (!svgNode || !gNode) return;
+
+    // Calculate the scale and translate to center the node
+    // Previous attempts used fixed zoom, but this version adapts to container size.
+    const containerRect = svgNode.getBoundingClientRect();
+    const viewWidth = svgNode.viewBox.baseVal.width || containerRect.width;
+    const viewHeight = svgNode.viewBox.baseVal.height || containerRect.height;
+
+    // Target scale: 1.5x zoom, but clamp to avoid excessive zoom
+    const targetScale = Math.max(1.5, d3.zoomTransform(svgNode).k);
+    // Center node in view
+    const tx = viewWidth / 2 - node.x * targetScale;
+    const ty = viewHeight / 2 - node.y * targetScale;
+
+    // Animate zoom/pan using d3
+    svg.transition()
+        .duration(500)
+        .call(
+            zoom.transform,
+            d3.zoomIdentity
+                .translate(tx, ty)
+                .scale(targetScale)
+        );
+}
+
+// When pressing Enter in the search box, focus the first result
+function focusFirstSearchResult() {
+    if (searchResults.length > 0) {
+        focusAndSelectNode(searchResults[0].id);
+    }
+}
+
 // --- Text Measurement Function ---
 function rect(x: number, y: number, w: number, h: number) {
 	return "M" + [x, y] + " l" + [w, 0] + " l" + [0, h] + " l" + [-w, 0] + "z";
@@ -1789,7 +1856,68 @@ function removePropertyField(idx: number) {
 	<div style="margin-bottom:1rem;">
 		<label><input type="radio" bind:group={mode} value="force" on:change={() => switchMode('force')}> Global repulsion (default)</label>
 		<label style="margin-left:2em;"><input type="radio" bind:group={mode} value="manual" on:change={() => switchMode('manual')}> Local Repulsion</label>
-	</div>	<div class="canvas-container" bind:this={canvasContainer}>
+	</div>	
+	
+	
+
+	<!-- Node Search UI -->
+    <div style="display:flex;justify-content:center;align-items:center;margin-bottom:1rem;gap:0.5em;">
+		<div style="position:relative;display:inline-block;">
+			<input
+				type="text"
+				placeholder="Search node by name..."
+				bind:value={searchQuery}
+				on:keydown={(e) => { if (e.key === 'Enter') focusFirstSearchResult(); }}
+				style="padding:0.5em 2.2em 0.5em 1em; font-size:1rem; border:1px solid #ccc; border-radius:4px; min-width:220px;"
+			/>
+			{#if searchQuery.trim()}
+				<!-- X button to clear input, absolutely positioned inside the input box -->
+				<button
+					type="button"
+					aria-label="Clear search"
+					on:click={() => { searchQuery = ''; }}
+					style="
+						position:absolute;
+						right:0.4em;
+						top:50%;
+						transform:translateY(-50%);
+						background:transparent;
+						border:none;
+						color:#888;
+						font-size:1.2em;
+						cursor:pointer;
+						padding:0;
+						line-height:1;
+					"
+					tabindex="-1"
+				>&#10005;</button>
+			{/if}
+		</div>
+		{#if searchQuery.trim()}
+			<span style="font-size:0.95em;color:#666;">
+				{searchResults.length} match{searchResults.length === 1 ? '' : 'es'}
+			</span>
+		{/if}
+	</div>
+    {#if searchActive && searchResults.length > 0}
+        <div style="display:flex;justify-content:center;">
+            <ul style="list-style:none;padding:0;margin:0;max-width:400px;width:100%;">
+                {#each searchResults as node}
+                    <li style="margin-bottom:0.2em;">
+                        <button
+                            style="width:100%;text-align:left;padding:0.3em 0.7em;border-radius:4px;border:1px solid #eee;background:#f7fafd;cursor:pointer;font-size:1em;"
+                            on:click={() => focusAndSelectNode(node.id)}
+                        >
+                            {node.label}
+                        </button>
+                    </li>
+                {/each}
+            </ul>
+        </div>
+    {/if}
+	
+	
+	<div class="canvas-container" bind:this={canvasContainer}>
 		<!-- D3 SVG will be inserted here -->
 	</div>{#if showRenameDialog}
 		<div class="modal-backdrop" on:contextmenu|preventDefault>
