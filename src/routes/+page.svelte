@@ -1578,7 +1578,7 @@ function render() {
     // Merge enter and update
     const nodeMerge = nodeEnter.merge(nodeSelection);
 
-    // Drag & deletion
+    // Drag functionality
     const drag = d3.drag<SVGGElement, Node>()
         .filter(e => e.button === 0 || e.button === 2)
         .on('start', handleDragStart)
@@ -1586,14 +1586,9 @@ function render() {
         .on('end', handleDragEnd);
     nodeMerge.call(drag);
 
-    // Mouse event handlers for nodes
-    nodeMerge.on('mousedown', (e, d) => {
-        if (e.button === 1) {
-            e.preventDefault(); 
-            e.stopPropagation(); 
-            deleteNode(d);
-        }
-    });
+    // Removed middle mouse button deletion handler
+    // Previously: nodes could be deleted with middle-click, but this was inconsistent with edge deletion
+    // Now: deletion is only handled via Delete/Backspace keys for consistency
 
     // Click handler for direct clicks (not from drag end)
     // This handles cases where click events might bypass the drag system
@@ -1628,87 +1623,89 @@ function render() {
     nodeMerge.attr('transform', d => `translate(${d.x}, ${d.y})`);
     nodeSelection.exit().remove();
 
-	// Render edges
-	const edgeSelection = g.selectAll<SVGGElement, Edge>('.edge')
-		.data(edges, d => d.id);
+    // Render edges
+    const edgeSelection = g.selectAll<SVGGElement, Edge>('.edge')
+        .data(edges, d => d.id);
 
-	const edgeEnter = edgeSelection.enter()
-		.append('g')
-		.attr('class', 'edge');
+    const edgeEnter = edgeSelection.enter()
+        .append('g')
+        .attr('class', 'edge');
 
-	edgeEnter.append('line')
-		.attr('stroke', '#666')
-		.attr('stroke-width', 2)
-		.attr('marker-end', 'url(#arrowhead)');
+    edgeEnter.append('line')
+        .attr('stroke', '#666')
+        .attr('stroke-width', 2)
+        .attr('marker-end', 'url(#arrowhead)');
 
-	edgeEnter.append('rect')
-		.attr('fill', 'white')
-		.attr('stroke', '#666')
-		.attr('stroke-width', 1)
-		.attr('rx', 3);
+    edgeEnter.append('rect')
+        .attr('fill', 'white')
+        .attr('stroke', '#666')
+        .attr('stroke-width', 1)
+        .attr('rx', 3);
 
-	edgeEnter.append('text')
-		.attr('text-anchor', 'middle')
-		.attr('dy', '.35em')
-		.attr('font-size', '10px')
-		.attr('fill', '#333')
-		.text(d => d.name);
-	const edgeMerge = edgeEnter.merge(edgeSelection);
-	edgeMerge.on('mousedown', (e, d) => {
-		if (e.button === 1) { e.preventDefault(); e.stopPropagation(); deleteEdge(d); }
-	});
-	// Single click: select edge
-	edgeMerge.on('click', (e, d) => {
-		if (e.button === 0) {
-			e.preventDefault(); e.stopPropagation(); selectEdge(d, e);
-		}
-	});
-	// Double click: open edit dialog
-	edgeMerge.on('dblclick', (e, d) => {
-		if (e.button === 0) {
-			e.preventDefault();
-			e.stopPropagation();
-			openEditDialog(d, 'edge');
-		}
-	});
-	// Highlight selected edges
-	edgeMerge.select('line')
-		.attr('stroke', d => selectedEdgeIds.has(d.id) ? '#ffb300' : '#666')
-		.attr('stroke-width', d => selectedEdgeIds.has(d.id) ? 4 : 2);
-	
-	// Update edge text content for renamed edges
-	edgeMerge.select('text')
-		.text(d => d.name);
+    edgeEnter.append('text')
+        .attr('text-anchor', 'middle')
+        .attr('dy', '.35em')
+        .attr('font-size', '10px')
+        .attr('fill', '#333')
+        .text(d => d.name);
+    const edgeMerge = edgeEnter.merge(edgeSelection);
+    
+    // Removed middle mouse button deletion handler for edges
+    // Previously: edges could be deleted with middle-click, but this was inconsistent with keyboard shortcuts
+    // Now: deletion is only handled via Delete/Backspace keys for both nodes and edges
+    
+    // Single click: select edge
+    edgeMerge.on('click', (e, d) => {
+        if (e.button === 0) {
+            e.preventDefault(); e.stopPropagation(); selectEdge(d, e);
+        }
+    });
+    // Double click: open edit dialog
+    edgeMerge.on('dblclick', (e, d) => {
+        if (e.button === 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            openEditDialog(d, 'edge');
+        }
+    });
+    // Highlight selected edges
+    edgeMerge.select('line')
+        .attr('stroke', d => selectedEdgeIds.has(d.id) ? '#ffb300' : '#666')
+        .attr('stroke-width', d => selectedEdgeIds.has(d.id) ? 4 : 2);
+    
+    // Update edge text content for renamed edges
+    edgeMerge.select('text')
+        .text(d => d.name);
 
-	edgeMerge.each(function(d) {
-		const edgeGroup = d3.select(this);
-		const sourceNode = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
-		const targetNode = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
-		if (sourceNode && targetNode && sourceNode.x !== undefined && sourceNode.y !== undefined && targetNode.x !== undefined && targetNode.y !== undefined) {
-			const dx = targetNode.x - sourceNode.x;
-			const dy = targetNode.y - sourceNode.y;
-			const dist = Math.sqrt(dx*dx + dy*dy);			if (dist > 0) {
-				const ux = dx / dist, uy = dy / dist;
-				const startX = sourceNode.x + ux * sourceNode.radius;
-				const startY = sourceNode.y + uy * sourceNode.radius;
-				const endX = targetNode.x - ux * targetNode.radius;
-				const endY = targetNode.y - uy * targetNode.radius;
-				edgeGroup.select('line')
-					.attr('x1', startX).attr('y1', startY)
-					.attr('x2', endX).attr('y2', endY);
-				const midX = (startX + endX)/2, midY = (startY + endY)/2;
-				const text = edgeGroup.select('text');
-				const bbox = (text.node() as SVGTextElement).getBBox();
-				edgeGroup.select('rect')
-					.attr('x', midX - bbox.width/2 -2)
-					.attr('y', midY - bbox.height/2 -1)
-					.attr('width', bbox.width+4)
-					.attr('height', bbox.height+2);
-				text.attr('x', midX).attr('y', midY);
-			}
-		}
-	});
-	edgeSelection.exit().remove();
+    edgeMerge.each(function(d) {
+        const edgeGroup = d3.select(this);
+        const sourceNode = typeof d.source === 'string' ? nodes.find(n => n.id === d.source) : d.source;
+        const targetNode = typeof d.target === 'string' ? nodes.find(n => n.id === d.target) : d.target;
+        if (sourceNode && targetNode && sourceNode.x !== undefined && sourceNode.y !== undefined && targetNode.x !== undefined && targetNode.y !== undefined) {
+            const dx = targetNode.x - sourceNode.x;
+            const dy = targetNode.y - sourceNode.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);			if (dist > 0) {
+                const ux = dx / dist, uy = dy / dist;
+                const startX = sourceNode.x + ux * sourceNode.radius;
+                const startY = sourceNode.y + uy * sourceNode.radius;
+                const endX = targetNode.x - ux * targetNode.radius;
+                const endY = targetNode.y - uy * targetNode.radius;
+                edgeGroup.select('line')
+                    .attr('x1', startX).attr('y1', startY)
+                    .attr('x2', endX).attr('y2', endY);
+                const midX = (startX + endX)/2, midY = (startY + endY)/2;
+                const text = edgeGroup.select('text');
+                const bbox = (text.node() as SVGTextElement).getBBox();
+                edgeGroup.select('rect')
+                    .attr('x', midX - bbox.width/2 -2)
+                    .attr('y', midY - bbox.height/2 -1)
+                    .attr('width', bbox.width+4)
+                    .attr('height', bbox.height+2);
+                text.attr('x', midX).attr('y', midY);
+            }
+        }
+    });
+    edgeSelection.exit().remove();
 }
 
 // --- Selection Functions ---
@@ -1810,55 +1807,64 @@ function getSelectedNodeColor(): string | null {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
-	// If focus is in an input or textarea, do not interfere
-	const tag = (event.target as HTMLElement)?.tagName;
-	if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target as HTMLElement)?.isContentEditable) {
-		return;
-	}
-	// Delete selected nodes and edges
-	if (event.key === 'Delete' || event.key === 'Backspace') {
-		event.preventDefault();
-		
-		// Delete selected edges first
-		if (selectedEdgeIds.size > 0) {
-			edges = edges.filter(edge => !selectedEdgeIds.has(edge.id));
-			selectedEdgeIds.clear();
-		}
-		
-		// Delete selected nodes (and their connected edges)
-		if (selectedNodeIds.size > 0) {
-			const nodeIdsToDelete = Array.from(selectedNodeIds);
-			
-			// Remove edges connected to the nodes being deleted
-			edges = edges.filter(edge => {
-				const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id;
-				const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id;
-				return !nodeIdsToDelete.includes(sourceId) && !nodeIdsToDelete.includes(targetId);
-			});
-			
-			// Remove the nodes
-			nodes = nodes.filter(node => !selectedNodeIds.has(node.id));
-			selectedNodeIds.clear();
-		}
-		
-		// Update reactive state
-		selectedNodeIds = new Set();
-		selectedEdgeIds = new Set();
-		
-		// Restart simulation if in force mode
-		if (mode === 'force') {
-			restartSimulation();
-		}
-		
-		// Re-render
-		render();
-	}
-	
-	// Escape key clears selection
-	if (event.key === 'Escape') {
-		clearSelection();
-		render();
-	}
+    // If focus is in an input or textarea, do not interfere
+    const tag = (event.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target as HTMLElement)?.isContentEditable) {
+        return;
+    }
+    // Delete selected nodes and edges
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        
+        // Hide popover if the selected item being deleted has the popover open
+        if (showPopover && popoverItem) {
+            if (popoverType === 'node' && selectedNodeIds.has((popoverItem as Node).id)) {
+                hidePopover();
+            } else if (popoverType === 'edge' && selectedEdgeIds.has((popoverItem as Edge).id)) {
+                hidePopover();
+            }
+        }
+        
+        // Delete selected edges first
+        if (selectedEdgeIds.size > 0) {
+            edges = edges.filter(edge => !selectedEdgeIds.has(edge.id));
+            selectedEdgeIds.clear();
+        }
+        
+        // Delete selected nodes (and their connected edges)
+        if (selectedNodeIds.size > 0) {
+            const nodeIdsToDelete = Array.from(selectedNodeIds);
+            
+            // Remove edges connected to the nodes being deleted
+            edges = edges.filter(edge => {
+                const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id;
+                const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id;
+                return !nodeIdsToDelete.includes(sourceId) && !nodeIdsToDelete.includes(targetId);
+            });
+            
+            // Remove the nodes
+            nodes = nodes.filter(node => !selectedNodeIds.has(node.id));
+            selectedNodeIds.clear();
+        }
+        
+        // Update reactive state
+        selectedNodeIds = new Set();
+        selectedEdgeIds = new Set();
+        
+        // Restart simulation if in force mode
+        if (mode === 'force') {
+            restartSimulation();
+        }
+        
+        // Re-render
+        render();
+    }
+    
+    // Escape key clears selection
+    if (event.key === 'Escape') {
+        clearSelection();
+        render();
+    }
 }
 
 // --- End Selection Functions ---
@@ -2060,8 +2066,8 @@ function removePropertyField(idx: number) {
 
 <section>
 	<h1>Graph Database Editor (Force/Manual Switch)</h1>	<p>
-		Right-click on canvas to add nodes. Drag nodes to move them. Right-click and drag from one node to another to create edges. Click to select nodes/edges (Shift+click for multi-select). Double-click to rename. Press Delete to remove selected items. Middle-click to instantly delete.
-	</p>
+        Right-click on canvas to add nodes. Drag nodes to move them. Right-click and drag from one node to another to create edges. Click to select nodes/edges (Shift+click for multi-select). Double-click to rename. Press Delete to remove selected items.
+    </p>
 	
 	<!-- File Operations -->
 	<div class="file-controls" style="margin-bottom: 1rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; justify-content: center;">
