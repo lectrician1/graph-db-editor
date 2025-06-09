@@ -2015,15 +2015,12 @@ function confirmEdit() {
 
   if (editType === 'node') {
     const node = editItem as Node;
-    // Update label from editLabel
-    node.label = editLabel;
-    node.properties = {
-      createdAt: node.properties.createdAt && node.properties.createdAt.type === 'datetime'
-        ? node.properties.createdAt
-        : { type: 'datetime', value: now },
-      editedAt: { type: 'datetime', value: now },
-      ...newProps
-    };
+  node.label = editLabel;
+  node.properties = {
+    ...node.properties, // Always preserve all old properties, including createdAt
+    ...newProps,        // Overwrite with edited properties
+    editedAt: { type: 'datetime', value: now } // Always update editedAt
+  };
     // Recalculate radius if label changed
     node.radius = calculateNodeRadius(node.label);
     nodes = [...nodes];
@@ -2033,15 +2030,12 @@ function confirmEdit() {
     }
   } else {
     const edge = editItem as Edge;
-    // Update edge name from editLabel
-    edge.name = editLabel;
-    edge.properties = {
-      createdAt: edge.properties.createdAt && edge.properties.createdAt.type === 'datetime'
-        ? edge.properties.createdAt
-        : { type: 'datetime', value: now },
-      editedAt: { type: 'datetime', value: now },
-      ...newProps
-    };
+  edge.name = editLabel;
+  edge.properties = {
+    ...edge.properties,
+    ...newProps,
+    editedAt: { type: 'datetime', value: now }
+  };
     edges = [...edges];
   }
 
