@@ -2,10 +2,12 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import * as d3 from 'd3';
+import { marked } from 'marked'; // You need to install 'marked' (npm install marked)
 
 
 // 1) Define typed property values instead of plain strings
-type PropertyType = 'string'|'number'|'url'|'datetime'|'daterange';
+type PropertyType = 'string'|'number'|'url'|'datetime'|'daterange'|'markdown';
+
 interface PropertyValue {
   type: PropertyType;
   // value is either a primitive or a {start,end} for ranges
@@ -2238,8 +2240,14 @@ function removePropertyField(idx: number) {
       on:contextmenu|preventDefault
       tabindex="0"
       on:keydown={(e) => {
-        // Allow Enter to confirm and Escape to cancel from anywhere in the dialog
-        if (e.key === 'Enter') {
+        // Previous issue: Pressing Enter in any field (including markdown textarea) would trigger confirmEdit().
+        // Now: Only trigger confirmEdit() for Enter (without Shift) and not when focused on a textarea.
+        // This prevents Shift+Enter in markdown textarea from closing the dialog.
+        if (
+          e.key === 'Enter' &&
+          !(e.target instanceof HTMLTextAreaElement) &&
+          !e.shiftKey
+        ) {
           e.preventDefault();
           confirmEdit();
         }
@@ -2249,7 +2257,6 @@ function removePropertyField(idx: number) {
         }
       }}
     >
-      <!-- Add label/name input at the top of the edit dialog -->
       <h2>Edit {editType === 'node' ? 'Node' : 'Edge'}</h2>
       <label style="display:block;margin-bottom:0.5em;">
         {editType === 'node' ? 'Node Name:' : 'Edge Name:'}
@@ -2260,7 +2267,6 @@ function removePropertyField(idx: number) {
           autofocus
         />
       </label>
-      <!-- ...existing properties UI... -->
       <div style="margin-top:1em;">
         <h3>Properties</h3>
         {#each editProperties as prop, idx}
@@ -2272,6 +2278,7 @@ function removePropertyField(idx: number) {
               <option value="url">URL</option>
               <option value="datetime">Date/Time</option>
               <option value="daterange">Date/Time Range</option>
+              <option value="markdown">Markdown</option>
             </select>
             {#if prop.type==='daterange'}
               <input type="datetime-local" bind:value={prop.value} style="width:9em;" />
@@ -2283,6 +2290,22 @@ function removePropertyField(idx: number) {
               <input type="url" bind:value={prop.value} style="width:12em;" />
             {:else if prop.type==='datetime'}
               <input type="datetime-local" bind:value={prop.value} style="width:12em;" />
+            {:else if prop.type==='markdown'}
+              <!-- Multi-line textarea for markdown input.
+                   Previous issue: Pressing Enter (even with Shift) would close the dialog.
+                   Now: Only Enter without Shift outside textarea triggers confirmEdit.
+                   Shift+Enter in textarea inserts a newline as expected. -->
+              <textarea
+                bind:value={prop.value}
+                rows="3"
+                style="width:12em;resize:vertical;"
+                placeholder="Markdown text"
+                on:keydown={(e) => {
+                  // Prevent dialog from closing on Enter or Shift+Enter in textarea
+                  // (handled globally above, but this is a safeguard for future changes)
+                  e.stopPropagation();
+                }}
+              ></textarea>
             {:else}
               <input type="text" bind:value={prop.value} style="width:12em;" />
             {/if}
@@ -2334,8 +2357,10 @@ function removePropertyField(idx: number) {
                             {:else if prop.type === 'daterange'}
                                 {formatDate(prop.value.start)} to {formatDate(prop.value.end)}
                             {:else if prop.type === 'url'}
-                                <!-- Show URL as clickable link, open in new tab -->
                                 <a href={prop.value as string} target="_blank" rel="noopener noreferrer">{prop.value as string}</a>
+                            {:else if prop.type === 'markdown'}
+                                <!-- Render markdown safely -->
+                                <span class="markdown-rendered">{@html marked.parse(prop.value as string)}</span>
                             {:else}
                                 {prop.value}
                             {/if}
@@ -2601,5 +2626,31 @@ p {
     text-align: center;
     padding: 1rem 0;
 }
-
+.markdown-rendered {
+    display: block;
+    white-space: normal;
+    word-break: break-word;
+    font-size: 0.96em;
+    line-height: 1.5;
+    margin: 0.2em 0;
+}
+.markdown-rendered p {
+    margin: 0.2em 0;
+}
+.markdown-rendered ul, .markdown-rendered ol {
+    margin: 0.2em 0 0.2em 1.2em;
+}
+.markdown-rendered code {
+    background: #f5f5f5;
+    border-radius: 3px;
+    padding: 0.1em 0.3em;
+    font-size: 0.95em;
+}
+.markdown-rendered pre {
+    background: #f5f5f5;
+    border-radius: 3px;
+    padding: 0.5em;
+    font-size: 0.95em;
+    overflow-x: auto;
+}
 </style>
