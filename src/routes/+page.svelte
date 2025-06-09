@@ -344,25 +344,42 @@ $: if (browser && autoSaveEnabled && (nodes.length > 0 || edges.length > 0)) {
 	autoSaveToLocalStorage();
 }
 
+/**
+ * Returns the current graph data as a plain object, with schema version and timestamp.
+ * This is used for both export and autosave, ensuring consistency.
+ * 
+ * Previous issue: exportGraphAsJSON and autoSaveToLocalStorage duplicated logic and could diverge.
+ * Now, all serialization logic is in one place.
+ */
+function getGraphDataForExport() {
+    return {
+        version: 1, // Always include schema version for future migrations
+        nodes: nodes.map(n => ({ ...n, fx: undefined, fy: undefined, vx: undefined, vy: undefined })),
+        edges: edges.map(e => ({
+            ...e,
+            source: typeof e.source === 'object' ? e.source.id : e.source,
+            target: typeof e.target === 'object' ? e.target.id : e.target
+        })),
+        nodeCounter,
+        edgeCounter,
+        mode,
+        timestamp: new Date().toISOString() // Use 'timestamp' for both autosave and export
+    };
+}
+
+/**
+ * Auto-saves the current graph to localStorage.
+ * Uses the same data structure as export, ensuring versioning and consistency.
+ */
 function autoSaveToLocalStorage() {
-	try {
-		const graphData = {
-			nodes: nodes.map(n => ({ ...n, fx: undefined, fy: undefined, vx: undefined, vy: undefined })),
-			edges: edges.map(e => ({ 
-				...e, 
-				source: typeof e.source === 'object' ? e.source.id : e.source,
-				target: typeof e.target === 'object' ? e.target.id : e.target
-			})),
-			nodeCounter,
-			edgeCounter,
-			mode,
-			timestamp: new Date().toISOString()
-		};
-		localStorage.setItem('graph-editor-autosave', JSON.stringify(graphData));
-		lastSaved = new Date().toLocaleTimeString();
-	} catch (error) {
-		console.warn('Auto-save failed:', error);
-	}
+    try {
+        // Always use the same data structure as export
+        const graphData = getGraphDataForExport();
+        localStorage.setItem('graph-editor-autosave', JSON.stringify(graphData));
+        lastSaved = new Date().toLocaleTimeString();
+    } catch (error) {
+        console.warn('Auto-save failed:', error);
+    }
 }
 
 function loadFromLocalStorage() {
@@ -386,20 +403,12 @@ function loadFromLocalStorage() {
 	return false;
 }
 
+/**
+ * Exports the current graph as a JSON string.
+ * This function now simply stringifies the result of getGraphDataForExport.
+ */
 function exportGraphAsJSON() {
-	const graphData = {
-		nodes: nodes.map(n => ({ ...n, fx: undefined, fy: undefined, vx: undefined, vy: undefined })),
-		edges: edges.map(e => ({ 
-			...e, 
-			source: typeof e.source === 'object' ? e.source.id : e.source,
-			target: typeof e.target === 'object' ? e.target.id : e.target
-		})),
-		nodeCounter,
-		edgeCounter,
-		mode,
-		exportedAt: new Date().toISOString()
-	};
-	return JSON.stringify(graphData, null, 2);
+    return JSON.stringify(getGraphDataForExport(), null, 2);
 }
 
 function downloadGraph() {
