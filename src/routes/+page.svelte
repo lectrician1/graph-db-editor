@@ -3,6 +3,15 @@ import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import * as d3 from 'd3';
 
+
+// 1) Define typed property values instead of plain strings
+type PropertyType = 'string'|'number'|'url'|'datetime'|'daterange';
+interface PropertyValue {
+  type: PropertyType;
+  // value is either a primitive or a {start,end} for ranges
+  value: string|number|{ start: string; end: string };
+}
+
 // Node and Edge interfaces (compatible with both modes)
 interface Node extends d3.SimulationNodeDatum {
 	id: string;
@@ -12,7 +21,7 @@ interface Node extends d3.SimulationNodeDatum {
 	label: string;
 	color: string;
 	// Added for arbitrary text properties (e.g., URL, description, etc.)
-	properties: Record<string, string>;
+	properties: Record<string,PropertyValue>;
 }
 interface Edge extends d3.SimulationLinkDatum<Node> {
 	id: string;
@@ -20,7 +29,7 @@ interface Edge extends d3.SimulationLinkDatum<Node> {
 	target: string | Node;
 	name: string;
 	// Added for arbitrary text properties (e.g., URL, description, etc.)
-	properties: Record<string, string>;
+	properties: Record<string,PropertyValue>;
 }
 
 let canvasContainer: HTMLDivElement;
@@ -562,39 +571,52 @@ onDestroy(() => {
 });
 
 function spawnTestGraph() {
-	const nNodes = 100;	const centerNode: Node = {
-		id: 'node-0',
-		x: canvasWidth / 2,
-		y: canvasHeight / 2,
-		radius: calculateNodeRadius('Center'),
-		label: 'Center',
-		color: '#4285f4'
-	};
-	nodes = [centerNode];
-	edges = [];
-	for (let i = 1; i <= nNodes; i++) {
-		const angle = (2 * Math.PI * i) / nNodes;
-		const x = canvasWidth / 2 + 250 * Math.cos(angle);
-		const y = canvasHeight / 2 + 250 * Math.sin(angle);		const nodeLabel = `Node ${i}`;
-		const node: Node = {
-			id: `node-${i}`,
-			x,
-			y,
-			radius: calculateNodeRadius(nodeLabel),
-			label: nodeLabel,
-			color: '#4285f4'
-		};
-		nodes.push(node);
-		edges.push({
-			id: `edge-${i}`,
-			source: centerNode.id,
-			target: node.id,
-			name: `Edge ${i}`,
-			properties: {}
-		});
-	}
-	nodeCounter = nNodes;
-	edgeCounter = nNodes;
+    const nNodes = 100;
+    const centerNode: Node = {
+        id: 'node-0',
+        x: canvasWidth / 2,
+        y: canvasHeight / 2,
+        radius: calculateNodeRadius('Center'),
+        label: 'Center',
+        color: '#4285f4',
+        properties: {
+            createdAt: { type: 'datetime', value: new Date().toISOString() },
+            editedAt: { type: 'datetime', value: new Date().toISOString() }
+        }
+    };
+    nodes = [centerNode];
+    edges = [];
+    for (let i = 1; i <= nNodes; i++) {
+        const angle = (2 * Math.PI * i) / nNodes;
+        const x = canvasWidth / 2 + 250 * Math.cos(angle);
+        const y = canvasHeight / 2 + 250 * Math.sin(angle);
+        const nodeLabel = `Node ${i}`;
+        const node: Node = {
+            id: `node-${i}`,
+            x,
+            y,
+            radius: calculateNodeRadius(nodeLabel),
+            label: nodeLabel,
+            color: '#4285f4',
+            properties: {
+                createdAt: { type: 'datetime', value: new Date().toISOString() },
+                editedAt: { type: 'datetime', value: new Date().toISOString() }
+            }
+        };
+        nodes.push(node);
+        edges.push({
+            id: `edge-${i}`,
+            source: centerNode.id,
+            target: node.id,
+            name: `Edge ${i}`,
+            properties: {
+                createdAt: { type: 'datetime', value: new Date().toISOString() }, // FIXED
+                editedAt: { type: 'datetime', value: new Date().toISOString() }   // FIXED
+            }
+        });
+    }
+    nodeCounter = nNodes;
+    edgeCounter = nNodes;
 }
 
 let isRightClickDraggingFromCanvas = false;
@@ -1032,8 +1054,9 @@ function handleMouseMove(event: MouseEvent) {
 function addNode(x: number, y: number, label?: string) {
     const nodeLabel = label || `Node ${nodeCounter + 1}`;
     const radius = calculateNodeRadius(nodeLabel);
-    const now = new Date().toISOString(); // Track creation time
+    const now = new Date().toISOString();
 
+    // Fix: createdAt/editedAt must be PropertyValue objects, not strings
     const newNode: Node = {
         id: `node-${++nodeCounter}`,
         x,
@@ -1042,9 +1065,9 @@ function addNode(x: number, y: number, label?: string) {
         label: nodeLabel,
         color: '#4285f4',
         properties: {
-            createdAt: now,
-            editedAt: now
-        } // Always initialize properties with timestamps
+            createdAt: { type: 'datetime', value: now },
+            editedAt: { type: 'datetime', value: now }
+        }
     };
     nodes = [...nodes, newNode];
     restartSimulation();
@@ -1078,9 +1101,9 @@ function confirmCreateEdge() {
             target: pendingEdge.target.id,
             name: createEdgeName.trim(),
             properties: {
-                createdAt: now,
-                editedAt: now
-            } // Always initialize properties with timestamps
+                createdAt: { type: 'datetime', value: now }, // FIXED: use PropertyValue
+                editedAt: { type: 'datetime', value: now }   // FIXED: use PropertyValue
+            }
         };
         edges = [...edges, newEdge];
         if (mode === 'force') restartSimulation();
@@ -1089,7 +1112,8 @@ function confirmCreateEdge() {
 }
 
 function createEdgeFromDialog() {
-    confirmCreateEdge();
+    // This function is called by the dialog OK button and also by confirmCreateEdge.
+    // It previously duplicated edge creation logic, but now always uses PropertyValue for timestamps.
     if (!createEdgeName.trim() || !pendingEdge) {
         closeCreateEdgeDialog();
         return;
@@ -1103,8 +1127,8 @@ function createEdgeFromDialog() {
             target: pendingEdge.target.id,
             name: createEdgeName,
             properties: {
-                createdAt: now,
-                editedAt: now
+                createdAt: { type: 'datetime', value: now }, // FIXED: use PropertyValue
+                editedAt: { type: 'datetime', value: now }   // FIXED: use PropertyValue
             }
         }
     ];
@@ -1136,8 +1160,7 @@ function closeCreateEdgeAndNodeDialog() {
 }
 
 function confirmCreateEdgeAndNode() {
-    // If the dialog was opened from right-drag, pendingEdgeSourceNode is null,
-    // and pendingEdgeEnd.targetId is the id of the node to connect to.
+    // ...existing code...
     if (
         pendingEdgeStart &&
         pendingEdgeEnd &&
@@ -1145,10 +1168,7 @@ function confirmCreateEdgeAndNode() {
         newNodeName.trim() &&
         pendingEdgeEnd.targetId
     ) {
-        // Store the last entered edge name for future dialogs
         lastEdgeName = newEdgeName.trim();
-
-        // Create the new node at drag start position
         const x = pendingEdgeStart.x;
         const y = pendingEdgeStart.y;
         const label = newNodeName.trim();
@@ -1162,8 +1182,8 @@ function confirmCreateEdgeAndNode() {
             label,
             color: '#4285f4',
             properties: {
-                createdAt: now,
-                editedAt: now
+                createdAt: { type: 'datetime', value: now },
+                editedAt: { type: 'datetime', value: now }
             }
         };
         nodes = [...nodes, newNode];
@@ -1174,8 +1194,8 @@ function confirmCreateEdgeAndNode() {
             target: pendingEdgeEnd.targetId,
             name: newEdgeName.trim(),
             properties: {
-                createdAt: now,
-                editedAt: now
+                createdAt: { type: 'datetime', value: now }, // FIXED: use PropertyValue
+                editedAt: { type: 'datetime', value: now }   // FIXED: use PropertyValue
             }
         };
         edges = [...edges, newEdge];
@@ -1184,17 +1204,14 @@ function confirmCreateEdgeAndNode() {
         closeCreateEdgeAndNodeDialog();
         return;
     }
-    // Fallback: original logic for node-to-canvas drag (not used in this feature)
+    // ...existing fallback logic...
     if (
         pendingEdgeSourceNode &&
         pendingEdgeEnd &&
         newEdgeName.trim() &&
         newNodeName.trim()
     ) {
-        // Store the last entered edge name for future dialogs
         lastEdgeName = newEdgeName.trim();
-
-        // Place new node at drag end position
         const x = pendingEdgeEnd.x;
         const y = pendingEdgeEnd.y;
         const label = newNodeName.trim();
@@ -1208,8 +1225,8 @@ function confirmCreateEdgeAndNode() {
             label,
             color: '#4285f4',
             properties: {
-                createdAt: now,
-                editedAt: now
+                createdAt: { type: 'datetime', value: now },
+                editedAt: { type: 'datetime', value: now }
             }
         };
         nodes = [...nodes, newNode];
@@ -1220,8 +1237,8 @@ function confirmCreateEdgeAndNode() {
             target: newNode.id,
             name: newEdgeName.trim(),
             properties: {
-                createdAt: now,
-                editedAt: now
+                createdAt: { type: 'datetime', value: now }, // FIXED: use PropertyValue
+                editedAt: { type: 'datetime', value: now }   // FIXED: use PropertyValue
             }
         };
         edges = [...edges, newEdge];
@@ -1504,18 +1521,26 @@ function closeCreateEdgeDialog() {
 }
 
 function deleteNode(nodeToDelete: Node) {
-	edges = edges.filter(edge => {
-		const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id;
-		const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id;
-		return sourceId !== nodeToDelete.id && targetId !== nodeToDelete.id;
-	});
-	nodes = nodes.filter(node => node.id !== nodeToDelete.id);
-	if (mode === 'force') restartSimulation();
+    // If the popover is open for this node, close it
+    if (showPopover && popoverType === 'node' && popoverItem && (popoverItem as Node).id === nodeToDelete.id) {
+        hidePopover();
+    }
+    edges = edges.filter(edge => {
+        const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id;
+        const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id;
+        return sourceId !== nodeToDelete.id && targetId !== nodeToDelete.id;
+    });
+    nodes = nodes.filter(node => node.id !== nodeToDelete.id);
+    if (mode === 'force') restartSimulation();
 }
 
 function deleteEdge(edgeToDelete: Edge) {
-	edges = edges.filter(edge => edge.id !== edgeToDelete.id);
-	if (mode === 'force') restartSimulation();
+    // If the popover is open for this edge, close it
+    if (showPopover && popoverType === 'edge' && popoverItem && (popoverItem as Edge).id === edgeToDelete.id) {
+        hidePopover();
+    }
+    edges = edges.filter(edge => edge.id !== edgeToDelete.id);
+    if (mode === 'force') restartSimulation();
 }
 
 function render() {
@@ -1849,33 +1874,25 @@ function confirmRename() {
         if (renameType === 'node') {
             const node = selectedItem as Node;
             node.label = renameValue;
-            // Recalculate radius based on new label
             node.radius = calculateNodeRadius(renameValue);
-            // Update editedAt timestamp
             node.properties = {
                 ...node.properties,
-                editedAt: now
+                editedAt: { type: 'datetime', value: now } // FIXED: use PropertyValue
             };
             nodes = [...nodes];
-            
-            // Update collision detection in simulation if in force mode
             if (mode === 'force' && simulation) {
                 simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
                 restartSimulation();
             }
-            
-            // Force re-render
             render();
         } else if (renameType === 'edge') {
             const edge = selectedItem as Edge;
             edge.name = renameValue;
-            // Update editedAt timestamp
             edge.properties = {
                 ...edge.properties,
-                editedAt: now
+                editedAt: { type: 'datetime', value: now } // FIXED: use PropertyValue
             };
             edges = [...edges];
-            // Force re-render for edge changes
             render();
         }
     }
@@ -1887,16 +1904,75 @@ let showEditDialog = false;
 let editType: 'node' | 'edge' | null = null;
 let editItem: Node | Edge | null = null;
 let editLabel = '';
-let editProperties: { key: string; value: string }[] = [];
+// 2) Change editProperties to track key, type, value, (and optional endValue)
+let editProperties: {
+  key: string;
+  type: PropertyType;
+  value: string;
+  endValue?: string;
+}[] = [];
 
-function openEditDialog(item: Node | Edge, type: 'node' | 'edge') {
-    editType = type;
-    editItem = item;
-    editLabel = type === 'node' ? (item as Node).label : (item as Edge).name;
-    // Convert properties object to array for editing
-    editProperties = Object.entries(item.properties || {}).map(([key, value]) => ({ key, value }));
-    showEditDialog = true;
+// Utility: Convert ISO string to "YYYY-MM-DDTHH:mm" for <input type="datetime-local">
+// This is needed because <input type="datetime-local"> expects a local time string without 'Z'
+function toDatetimeLocalString(iso: string): string {
+    if (!iso) return '';
+    // Handles both with and without milliseconds
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    // Pad with zeros as needed
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+// Utility: Convert "YYYY-MM-DDTHH:mm" (from input) to ISO string
+function fromDatetimeLocalString(local: string): string {
+    if (!local) return '';
+    // Treat as local time, convert to ISO
+    const d = new Date(local);
+    return d.toISOString();
+}
+
+function openEditDialog(item: Node|Edge, type: 'node'|'edge') {
+  // If the popover is open for this item, close it
+  if (
+    showPopover &&
+    popoverItem &&
+    ((type === 'node' && popoverType === 'node' && (popoverItem as Node).id === (item as Node).id) ||
+     (type === 'edge' && popoverType === 'edge' && (popoverItem as Edge).id === (item as Edge).id))
+  ) {
+    hidePopover();
+  }
+  // Set label for editing
+  editLabel = type === 'node' ? (item as Node).label : (item as Edge).name;
+  editType = type;
+  editItem = item;
+  // Map properties to editProperties array for the dialog UI
+  editProperties = Object.entries(item.properties||{}).map(([k,pv]) => {
+    // Special handling for datetime/daterange: prefill with correct format for input
+    if (pv.type === 'datetime') {
+      return {
+        key: k,
+        type: pv.type,
+        value: toDatetimeLocalString(typeof pv.value === 'string' ? pv.value : '')
+      };
+    } else if (pv.type === 'daterange' && typeof pv.value === 'object') {
+      return {
+        key: k,
+        type: pv.type,
+        value: toDatetimeLocalString(pv.value.start),
+        endValue: toDatetimeLocalString(pv.value.end)
+      };
+    } else {
+      return {
+        key: k,
+        type: pv.type,
+        value: String(pv.value)
+      };
+    }
+  });
+  showEditDialog = true;
+}
+
 function closeEditDialog() {
     showEditDialog = false;
     editType = null;
@@ -1905,37 +1981,63 @@ function closeEditDialog() {
     editProperties = [];
 }
 function confirmEdit() {
-    if (editItem && editType) {
-        const now = new Date().toISOString();
-        if (editType === 'node') {
-            const node = editItem as Node;
-            node.label = editLabel;
-            node.radius = calculateNodeRadius(editLabel);
-            // Convert array back to object, filter out empty keys
-            node.properties = {
-                ...Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value])),
-                createdAt: node.properties?.createdAt || now, // Preserve original createdAt if present
-                editedAt: now
-            };
-            nodes = [...nodes];
-            if (mode === 'force' && simulation) {
-                simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
-                restartSimulation();
-            }
-            render();
-        } else if (editType === 'edge') {
-            const edge = editItem as Edge;
-            edge.name = editLabel;
-            edge.properties = {
-                ...Object.fromEntries(editProperties.filter(p => p.key.trim() !== '').map(p => [p.key, p.value])),
-                createdAt: edge.properties?.createdAt || now, // Preserve original createdAt if present
-                editedAt: now
-            };
-            edges = [...edges];
-            render();
-        }
+  if (!editItem || !editType) return;
+  const now = new Date().toISOString();
+
+  // Build up typed property record from the edit dialog fields
+  const newProps: Record<string, PropertyValue> = {};
+  editProperties.forEach(p => {
+    if (!p.key.trim()) return;
+    let val: string | number | { start: string; end: string };
+    if (p.type === 'number') val = Number(p.value);
+    else if (p.type === 'daterange') {
+      // Convert local datetime strings back to ISO
+      val = {
+        start: fromDatetimeLocalString(p.value),
+        end: fromDatetimeLocalString(p.endValue || p.value)
+      };
     }
-    closeEditDialog();
+    else if (p.type === 'datetime') {
+      val = fromDatetimeLocalString(p.value);
+    }
+    else val = p.value;
+    newProps[p.key.trim()] = { type: p.type, value: val };
+  });
+
+  if (editType === 'node') {
+    const node = editItem as Node;
+    // Update label from editLabel
+    node.label = editLabel;
+    node.properties = {
+      createdAt: node.properties.createdAt && node.properties.createdAt.type === 'datetime'
+        ? node.properties.createdAt
+        : { type: 'datetime', value: now },
+      editedAt: { type: 'datetime', value: now },
+      ...newProps
+    };
+    // Recalculate radius if label changed
+    node.radius = calculateNodeRadius(node.label);
+    nodes = [...nodes];
+    if (mode === 'force' && simulation) {
+      simulation.force('collision', d3.forceCollide().radius(d => d.radius + 2).strength(0.7));
+      restartSimulation();
+    }
+  } else {
+    const edge = editItem as Edge;
+    // Update edge name from editLabel
+    edge.name = editLabel;
+    edge.properties = {
+      createdAt: edge.properties.createdAt && edge.properties.createdAt.type === 'datetime'
+        ? edge.properties.createdAt
+        : { type: 'datetime', value: now },
+      editedAt: { type: 'datetime', value: now },
+      ...newProps
+    };
+    edges = [...edges];
+  }
+
+  render();
+  closeEditDialog();
 }
 function addPropertyField() {
     editProperties = [...editProperties, { key: '', value: '' }];
@@ -2120,28 +2222,59 @@ function removePropertyField(idx: number) {
 			</div>
 		</div>
 	{/if}
-	{#if showEditDialog}
-    <div class="modal-backdrop" on:contextmenu|preventDefault>
-        <div class="modal-dialog" on:contextmenu|preventDefault>
-            <h2>Edit {editType === 'node' ? 'Node' : 'Edge'}</h2>
-            <input type="text" bind:value={editLabel} autofocus placeholder={editType === 'node' ? 'Node label' : 'Edge name'} on:keydown={(e) => { if (e.key === 'Enter') confirmEdit(); if (e.key === 'Escape') closeEditDialog(); }} />
-            <div style="margin-top:1em;">
-                <h3 style="margin-bottom:0.5em;">Properties</h3>
-                {#each editProperties as prop, idx}
-                    <div style="display:flex;gap:0.5em;margin-bottom:0.3em;align-items:center;">
-                        <input type="text" bind:value={prop.key} placeholder="Property name" style="width:7em;" />
-                        <input type="text" bind:value={prop.value} placeholder="Property value" style="width:12em;" />
-                        <button on:click={() => removePropertyField(idx)} title="Remove property" style="color:#b00;">✕</button>
-                    </div>
-                {/each}
-                <button class="action_button" on:click={addPropertyField}>Add Property</button>
-            </div>
-            <div class="modal-actions">
-                <button on:click={confirmEdit}>OK</button>
-                <button on:click={closeEditDialog}>Cancel</button>
-            </div>
-        </div>
+{#if showEditDialog}
+  <div class="modal-backdrop" on:contextmenu|preventDefault>
+    <div class="modal-dialog" on:contextmenu|preventDefault>
+      <!-- Add label/name input at the top of the edit dialog -->
+      <h2>Edit {editType === 'node' ? 'Node' : 'Edge'}</h2>
+      <label style="display:block;margin-bottom:0.5em;">
+        {editType === 'node' ? 'Node Name:' : 'Edge Name:'}
+        <input
+          type="text"
+          bind:value={editLabel}
+          placeholder={editType === 'node' ? 'Node name' : 'Edge name'}
+          autofocus
+        />
+      </label>
+      <!-- ...existing properties UI... -->
+      <div style="margin-top:1em;">
+        <h3>Properties</h3>
+        {#each editProperties as prop, idx}
+          <div style="display:flex;gap:0.5em;align-items:center;margin-bottom:0.3em;">
+            <input type="text" bind:value={prop.key} placeholder="Name" style="width:7em;" />
+            <select bind:value={prop.type}>
+              <option value="string">String</option>
+              <option value="number">Number</option>
+              <option value="url">URL</option>
+              <option value="datetime">Date/Time</option>
+              <option value="daterange">Date/Time Range</option>
+            </select>
+            {#if prop.type==='daterange'}
+              <input type="datetime-local" bind:value={prop.value} style="width:9em;" />
+              <span>to</span>
+              <input type="datetime-local" bind:value={prop.endValue} style="width:9em;" />
+            {:else if prop.type==='number'}
+              <input type="number" bind:value={prop.value} style="width:12em;" />
+            {:else if prop.type==='url'}
+              <input type="url" bind:value={prop.value} style="width:12em;" />
+            {:else if prop.type==='datetime'}
+              <input type="datetime-local" bind:value={prop.value} style="width:12em;" />
+            {:else}
+              <input type="text" bind:value={prop.value} style="width:12em;" />
+            {/if}
+            <button on:click={() => removePropertyField(idx)} title="Remove">✕</button>
+          </div>
+        {/each}
+        <button class="action_button" on:click={addPropertyField}>
+          Add Property
+        </button>
+      </div>
+      <div class="modal-actions">
+        <button on:click={confirmEdit}>OK</button>
+        <button on:click={closeEditDialog}>Cancel</button>
+      </div>
     </div>
+  </div>
 {/if}
 
 {#if showPopover && popoverItem}
@@ -2168,15 +2301,20 @@ function removePropertyField(idx: number) {
             {#if popoverItem.properties && Object.keys(popoverItem.properties).length > 0}
                 <div class="properties-section">
                     <h4>Properties:</h4>
-                    {#each Object.entries(popoverItem.properties) as [key, value]}
+                    {#each Object.entries(popoverItem.properties) as [key, prop]}
                         <div class="property-item">
                             <span class="property-key">{key}:</span>
                             <span class="property-value">
-                                {#if key.toLowerCase().includes('at') || key.toLowerCase().includes('date')}
-                                    {formatDate(value)}
-                                {:else}
-                                    {value}
-                                {/if}
+                            {#if prop.type === 'datetime'}
+                                {formatDate(prop.value as string)}
+                            {:else if prop.type === 'daterange'}
+                                {formatDate(prop.value.start)} to {formatDate(prop.value.end)}
+                            {:else if prop.type === 'url'}
+                                <!-- Show URL as clickable link, open in new tab -->
+                                <a href={prop.value as string} target="_blank" rel="noopener noreferrer">{prop.value as string}</a>
+                            {:else}
+                                {prop.value}
+                            {/if}
                             </span>
                         </div>
                     {/each}
