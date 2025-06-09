@@ -2227,7 +2227,22 @@ function removePropertyField(idx: number) {
 	{/if}
 {#if showEditDialog}
   <div class="modal-backdrop" on:contextmenu|preventDefault>
-    <div class="modal-dialog" on:contextmenu|preventDefault>
+    <div
+      class="modal-dialog"
+      on:contextmenu|preventDefault
+      tabindex="0"
+      on:keydown={(e) => {
+        // Allow Enter to confirm and Escape to cancel from anywhere in the dialog
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          confirmEdit();
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeEditDialog();
+        }
+      }}
+    >
       <!-- Add label/name input at the top of the edit dialog -->
       <h2>Edit {editType === 'node' ? 'Node' : 'Edge'}</h2>
       <label style="display:block;margin-bottom:0.5em;">
