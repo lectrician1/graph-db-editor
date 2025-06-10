@@ -140,8 +140,8 @@ function updatePopoverPosition() {
     // If we have a stored canvas position (from click), use that
     if (popoverCanvasPosition.x !== 0 || popoverCanvasPosition.y !== 0) {
         // Convert canvas coordinates to screen coordinates using the current transform
-        const screenX = transform.applyX(popoverCanvasPosition.x) + svgRect.left;
-        const screenY = transform.applyY(popoverCanvasPosition.y) + svgRect.top;
+        const screenX = transform.applyX(popoverCanvasPosition.x);
+        const screenY = transform.applyY(popoverCanvasPosition.y);
         
         popoverScreenPosition = {
             x: screenX + 10, // Small offset so popover doesn't cover the click point
