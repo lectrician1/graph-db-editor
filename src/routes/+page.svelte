@@ -83,7 +83,9 @@ const repelStrength = 0.3;
 let showPopover = false;
 let popoverItem: Node | Edge | null = null;
 let popoverType: 'node' | 'edge' | null = null;
-let popoverPosition = { x: 0, y: 0 };
+// Change popover position to use canvas coordinates instead of screen coordinates
+let popoverCanvasPosition = { x: 0, y: 0 }; // Position in canvas/SVG coordinate space
+let popoverScreenPosition = { x: 0, y: 0 }; // Calculated screen position for CSS
 
 // Function to show popover for selected item
 function updatePopover() {
@@ -111,9 +113,23 @@ function updatePopover() {
     }
 }
 
+function showPopoverAtPosition(item: Node | Edge, type: 'node' | 'edge', clickEvent: MouseEvent) {
+    popoverItem = item;
+    popoverType = type;
+    
+    // Convert click position to canvas coordinates
+    const [canvasX, canvasY] = d3.pointer(clickEvent, g.node());
+    
+    // Store canvas position - this stays fixed relative to the canvas content
+    popoverCanvasPosition = { x: canvasX, y: canvasY };
+    
+    showPopover = true;
+    updatePopoverPosition();
+}
+
 // Function to update popover position based on selected item
 function updatePopoverPosition() {
-    if (!popoverItem || !svg || !g) return;
+    if (!showPopover || !svg || !g) return;
 
     const svgNode = svg.node();
     if (!svgNode) return;
@@ -121,35 +137,48 @@ function updatePopoverPosition() {
     const svgRect = svgNode.getBoundingClientRect();
     const transform = d3.zoomTransform(svgNode);
 
-    if (popoverType === 'node') {
-        const node = popoverItem as Node;
-        // Convert node coordinates to screen coordinates
-        const screenX = transform.applyX(node.x) + svgRect.left;
-        const screenY = transform.applyY(node.y) + svgRect.top;
+    // If we have a stored canvas position (from click), use that
+    if (popoverCanvasPosition.x !== 0 || popoverCanvasPosition.y !== 0) {
+        // Convert canvas coordinates to screen coordinates using the current transform
+        const screenX = transform.applyX(popoverCanvasPosition.x) + svgRect.left;
+        const screenY = transform.applyY(popoverCanvasPosition.y) + svgRect.top;
         
-        // Position popover to the right of the node, with some offset
-        popoverPosition = {
-            x: screenX + (node.radius * transform.k) + 20,
-            y: screenY - 50 // Offset upward a bit
+        popoverScreenPosition = {
+            x: screenX + 10, // Small offset so popover doesn't cover the click point
+            y: screenY + 10
         };
-    } else if (popoverType === 'edge') {
-        const edge = popoverItem as Edge;
-        const sourceNode = typeof edge.source === 'string' ? nodes.find(n => n.id === edge.source) : edge.source;
-        const targetNode = typeof edge.target === 'string' ? nodes.find(n => n.id === edge.target) : edge.target;
-        
-        if (sourceNode && targetNode) {
-            // Position at the midpoint of the edge
-            const midX = (sourceNode.x + targetNode.x) / 2;
-            const midY = (sourceNode.y + targetNode.y) / 2;
+    } else {
+        // Fallback: position relative to the item itself (for cases where popover is shown without click)
+        if (popoverType === 'node') {
+            const node = popoverItem as Node;
+            // Convert node coordinates to screen coordinates
+            const screenX = transform.applyX(node.x) + svgRect.left;
+            const screenY = transform.applyY(node.y) + svgRect.top;
             
-            // Convert to screen coordinates
-            const screenX = transform.applyX(midX) + svgRect.left;
-            const screenY = transform.applyY(midY) + svgRect.top;
-            
-            popoverPosition = {
-                x: screenX + 20,
-                y: screenY - 50
+            // Position popover to the right of the node, with some offset
+            popoverScreenPosition = {
+                x: screenX + (node.radius * transform.k) + 20,
+                y: screenY - 50 // Offset upward a bit
             };
+        } else if (popoverType === 'edge') {
+            const edge = popoverItem as Edge;
+            const sourceNode = typeof edge.source === 'string' ? nodes.find(n => n.id === edge.source) : edge.source;
+            const targetNode = typeof edge.target === 'string' ? nodes.find(n => n.id === edge.target) : edge.target;
+            
+            if (sourceNode && targetNode) {
+                // Position at the midpoint of the edge
+                const midX = (sourceNode.x + targetNode.x) / 2;
+                const midY = (sourceNode.y + targetNode.y) / 2;
+                
+                // Convert to screen coordinates
+                const screenX = transform.applyX(midX) + svgRect.left;
+                const screenY = transform.applyY(midY) + svgRect.top;
+                
+                popoverScreenPosition = {
+                    x: screenX + 20,
+                    y: screenY - 50
+                };
+            }
         }
     }
 
@@ -157,17 +186,17 @@ function updatePopoverPosition() {
     const popoverWidth = 280; // Approximate popover width
     const popoverHeight = 200; // Approximate popover height
     
-    if (popoverPosition.x + popoverWidth > window.innerWidth) {
-        popoverPosition.x = window.innerWidth - popoverWidth - 10;
+    if (popoverScreenPosition.x + popoverWidth > window.innerWidth) {
+        popoverScreenPosition.x = window.innerWidth - popoverWidth - 10;
     }
-    if (popoverPosition.x < 10) {
-        popoverPosition.x = 10;
+    if (popoverScreenPosition.x < 10) {
+        popoverScreenPosition.x = 10;
     }
-    if (popoverPosition.y + popoverHeight > window.innerHeight) {
-        popoverPosition.y = window.innerHeight - popoverHeight - 10;
+    if (popoverScreenPosition.y + popoverHeight > window.innerHeight) {
+        popoverScreenPosition.y = window.innerHeight - popoverHeight - 10;
     }
-    if (popoverPosition.y < 10) {
-        popoverPosition.y = 10;
+    if (popoverScreenPosition.y < 10) {
+        popoverScreenPosition.y = 10;
     }
 }
 
@@ -175,6 +204,8 @@ function hidePopover() {
     showPopover = false;
     popoverItem = null;
     popoverType = null;
+    // Reset canvas position when hiding
+    popoverCanvasPosition = { x: 0, y: 0 };
 }
 
 // Function to format date strings for display
@@ -1734,8 +1765,8 @@ function selectNode(node: Node, event: MouseEvent) {
 
     // Update color palette selection indicator
     updateColorPaletteSelection();
-    // Update popover display
-    updatePopover();
+    // Show popover at click position instead of using updatePopover()
+    showPopoverAtPosition(node, 'node', event);
     render(); // Ensure UI updates immediately
 }
 
@@ -1762,8 +1793,8 @@ function selectEdge(edge: Edge, event: MouseEvent) {
 
     // Update color palette selection indicator
     updateColorPaletteSelection();
-    // Update popover display
-    updatePopover();
+    // Show popover at click position instead of using updatePopover()
+    showPopoverAtPosition(edge, 'edge', event);
     render(); // Ensure UI updates immediately
 }
 
@@ -2327,7 +2358,7 @@ function removePropertyField(idx: number) {
 {#if showPopover && popoverItem}
     <div 
         class="popover" 
-        style="left: {popoverPosition.x}px; top: {popoverPosition.y}px;"
+        style="left: {popoverScreenPosition.x}px; top: {popoverScreenPosition.y}px;"
         on:click|stopPropagation
     >
         <div class="popover-header">
