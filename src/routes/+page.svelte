@@ -2312,15 +2312,15 @@ function removePropertyField(idx: number) {
               <option value="markdown">Markdown</option>
             </select>
             {#if prop.type==='daterange'}
-              <input type="datetime-local" bind:value={prop.value} style="width:9em;" />
+              <input type="datetime-local" bind:value={prop.value} style="width:16em;" />
               <span>to</span>
-              <input type="datetime-local" bind:value={prop.endValue} style="width:9em;" />
+              <input type="datetime-local" bind:value={prop.endValue} style="width:16em;" />
             {:else if prop.type==='number'}
               <input type="number" bind:value={prop.value} style="width:12em;" />
             {:else if prop.type==='url'}
-              <input type="url" bind:value={prop.value} style="width:12em;" />
+              <input type="url" bind:value={prop.value} style="width:16em;" />
             {:else if prop.type==='datetime'}
-              <input type="datetime-local" bind:value={prop.value} style="width:12em;" />
+              <input type="datetime-local" bind:value={prop.value} style="width:16em;" />
             {:else if prop.type==='markdown'}
               <!-- Multi-line textarea for markdown input.
                    Previous issue: Pressing Enter (even with Shift) would close the dialog.
@@ -2329,7 +2329,7 @@ function removePropertyField(idx: number) {
               <textarea
                 bind:value={prop.value}
                 rows="3"
-                style="width:12em;resize:vertical;"
+                style="width:30em;height:10em;resize:both;"
                 placeholder="Markdown text"
                 on:keydown={(e) => {
                   // Prevent dialog from closing on Enter or Shift+Enter in textarea
@@ -2504,8 +2504,6 @@ p {
 	padding: 2rem 1.5rem 1.5rem 1.5rem;
 	border-radius: 8px;
 	box-shadow: 0 8px 32px rgba(0,0,0,0.18);
-	min-width: 300px;
-	max-width: 90vw;
 	display: flex;
 	flex-direction: column;
 	align-items: stretch;
@@ -2515,12 +2513,13 @@ p {
 	font-size: 1.2rem;
 	color: #333;
 }
-.modal-dialog input[type="text"] {
-	padding: 0.5rem;
-	font-size: 1rem;
-	border: 1px solid #ccc;
-	border-radius: 4px;
-	margin-bottom: 1rem;
+.modal-dialog input,
+.modal-dialog select,
+.modal-dialog textarea {
+    padding: 0.5rem;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
 }
 .modal-actions {
 	display: flex;
@@ -2572,7 +2571,7 @@ p {
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     z-index: 1001;
-    max-width: 280px;
+    max-width: 400px;
     min-width: 200px;
     font-size: 0.9rem;
     pointer-events: auto;
