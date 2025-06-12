@@ -104,3 +104,8 @@ button:focus:not(:focus-visible) {
 	width: 1px;
 	white-space: nowrap;
 }
+
+ul, ol {
+  list-style: initial;
+  margin-left: 1.5em; /* Optional: restore default indentation */
+}
