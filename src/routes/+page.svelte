@@ -2520,6 +2520,8 @@ p {
     font-size: 1rem;
     border: 1px solid #ccc;
     border-radius: 4px;
+	
+	margin-bottom: 1rem;
 }
 .modal-actions {
 	display: flex;
